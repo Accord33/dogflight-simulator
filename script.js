@@ -391,9 +391,7 @@ class NetClient {
 // --- Mechanics ---
 function fireBullet(source, isEnemy, opts = {}) {
     const now = Date.now();
-    if(!isEnemy) {
-        // Rate limit check handled in animate loop for player
-    } else {
+    if(isEnemy && !opts.fromRemote) {
         if (now - (source.lastShot||0) < 1000) return; // Enemy rate limit
         source.lastShot = now;
     }
@@ -601,6 +599,8 @@ function ensureRemotePlayer(id) {
     rp.armor = 100;
     rp.score = 0;
     rp.marker = createOpponentMarker();
+    rp.targetPos = rp.mesh.position.clone();
+    rp.targetQuat = rp.mesh.quaternion.clone();
     scene.add(rp.mesh);
     remotePlayers[id] = rp;
     return rp;
@@ -676,8 +676,14 @@ function applyRemoteState(msg) {
     if(!msg.playerId || msg.playerId === netPlayerId) return;
     const rp = ensureRemotePlayer(msg.playerId);
     const prevLives = rp.lives;
-    if(msg.pos) rp.mesh.position.set(msg.pos.x, msg.pos.y, msg.pos.z);
-    if(msg.rot) rp.mesh.quaternion.set(msg.rot.x, msg.rot.y, msg.rot.z, msg.rot.w);
+    if(msg.pos) {
+        if(!rp.targetPos) rp.targetPos = new THREE.Vector3();
+        rp.targetPos.set(msg.pos.x, msg.pos.y, msg.pos.z);
+    }
+    if(msg.rot) {
+        if(!rp.targetQuat) rp.targetQuat = new THREE.Quaternion();
+        rp.targetQuat.set(msg.rot.x, msg.rot.y, msg.rot.z, msg.rot.w);
+    }
     rp.speed = msg.speed || CONFIG.playerSpeedMin;
     if(rp.flame) rp.flame.scale.z = rp.speed * 2;
     if(typeof msg.armor === 'number') rp.armor = msg.armor;
@@ -982,6 +988,15 @@ function animate() {
         }
     }
 
+    // Smooth remote players to avoid jitter
+    if(gameMode !== GAME_MODES.LOCAL) {
+        Object.values(remotePlayers).forEach(rp => {
+            if(rp.targetPos) rp.mesh.position.lerp(rp.targetPos, 0.2);
+            if(rp.targetQuat) rp.mesh.quaternion.slerp(rp.targetQuat, 0.2);
+            if(rp.flame) rp.flame.scale.z = (rp.speed || CONFIG.playerSpeedMin) * 2;
+        });
+    }
+
     // --- 1. CONTINUOUS FIRE LOGIC ---
     if(mouse.isDown) {
         const now = Date.now();
@@ -1038,7 +1053,6 @@ function animate() {
             p.mesh.translateZ(-((p.speed)||CONFIG.bulletSpeed));
             p.life--;
             if(arr === missiles) {
-                // Re-resolve target if missing
                 if((!p.target || !p.target.position) && (p.targetType || p.targetId !== undefined)) {
                     const resolved = resolveMissileTarget({ targetType: p.targetType, targetId: p.targetId });
                     if(resolved) p.target = resolved;
@@ -1048,7 +1062,8 @@ function animate() {
             if(targetMesh) {
                  const toT = new THREE.Vector3().subVectors(targetMesh.position, p.mesh.position).normalize();
                  const f = new THREE.Vector3(0,0,-1).applyQuaternion(p.mesh.quaternion);
-                 if(f.angleTo(toT) < Math.PI/3) p.mesh.quaternion.slerp(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), toT), 0.04);
+                 const desired = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), toT);
+                 p.mesh.quaternion.slerp(desired, 0.08);
             }
             if(arr === missiles && p.life % 2 === 0) {
                 const t = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3), new THREE.MeshBasicMaterial({color:0xcccccc, transparent:true, opacity:0.4}));
