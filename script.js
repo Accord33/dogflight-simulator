@@ -2,7 +2,7 @@ const CONFIG = {
     playerSpeedMin: 0.3, playerSpeedMax: 1.2,
     turnSpeed: 0.015,
     bulletSpeed: 6.0, 
-    missileSpeed: 8.0, // Increased from 5.0 to 8.0 (faster than bullet/player)
+    missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
     enemySpeed: 0.5,
     seaSize: 2000,
     fireRate: 80 // ms between shots
@@ -428,7 +428,8 @@ function fireMissile(source, isEnemy) {
     m.position.copy(source.mesh.position); m.position.y -= 0.5;
     m.quaternion.copy(source.mesh.quaternion);
     scene.add(m);
-    missiles.push({ mesh: m, target: target, life: 300, speed: isEnemy?2.0:1.0, isEnemy: isEnemy });
+    const missileSpeed = player.speed * CONFIG.missileSpeedMultiplier;
+    missiles.push({ mesh: m, target: target, life: 300, speed: missileSpeed, isEnemy: isEnemy });
 }
 
 function createExplosion(pos, scale) {
