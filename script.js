@@ -35,6 +35,7 @@ let lastEnemySnapshotTime = 0;
 let lives = 3;
 let waitingForOpponent = false;
 let pendingStage = null;
+const RADAR_RANGE = 500; // meters
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
@@ -593,15 +594,25 @@ function ensureRemotePlayer(id) {
     rp.id = id;
     rp.armor = 100;
     rp.score = 0;
+    rp.marker = createOpponentMarker();
     scene.add(rp.mesh);
     remotePlayers[id] = rp;
     return rp;
+}
+
+function createOpponentMarker() {
+    const marker = document.createElement('div');
+    marker.className = 'opponent-marker';
+    marker.innerHTML = `<span class="marker-dist">0m</span>`;
+    ui.markersLayer.appendChild(marker);
+    return marker;
 }
 
 function removeRemotePlayer(id) {
     const rp = remotePlayers[id];
     if(!rp) return;
     scene.remove(rp.mesh);
+    if(rp.marker) rp.marker.remove();
     delete remotePlayers[id];
 }
 
@@ -1030,6 +1041,21 @@ function animate() {
         }
     }
 
+    if(gameMode === GAME_MODES.ONLINE_VS) {
+        for(const id in remotePlayers) {
+            const rp = remotePlayers[id];
+            if(!rp || !rp.marker) continue;
+            const p = rp.mesh.position.clone().project(camera);
+            const visible = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)).containsPoint(rp.mesh.position);
+            if(visible) {
+                rp.marker.style.display='flex';
+                rp.marker.style.left=((p.x*.5+.5)*window.innerWidth)+'px';
+                rp.marker.style.top=((-p.y*.5+.5)*window.innerHeight)+'px';
+                rp.marker.querySelector('.marker-dist').innerText=Math.floor(player.mesh.position.distanceTo(rp.mesh.position))+'m';
+            } else rp.marker.style.display='none';
+        }
+    }
+
     if(runEnemies && gameMode === GAME_MODES.ONLINE_COOP && netClient && netClient.isOpen()) {
         const now = Date.now();
         if(now - lastEnemySnapshotTime > 200) {
@@ -1055,12 +1081,28 @@ function animate() {
 
     // Radar
     while(ui.radar.children.length>0) ui.radar.removeChild(ui.radar.lastChild);
+    const radarRadius = 80;
+    const scale = radarRadius / RADAR_RANGE;
     // Player center dot
     let pd = document.createElement('div'); pd.className='radar-player'; ui.radar.appendChild(pd);
+    const addDot = (rel, cls) => {
+        rel.applyAxisAngle(new THREE.Vector3(0,1,0), -player.mesh.rotation.y);
+        let rx = rel.x * scale, rz = rel.z * scale;
+        const rd = Math.sqrt(rx*rx+rz*rz);
+        if(rd > radarRadius) { rx *= radarRadius/rd; rz *= radarRadius/rd; }
+        const d=document.createElement('div'); d.className=cls; d.style.left=(radarRadius+rx)+'px'; d.style.top=(radarRadius+rz)+'px'; ui.radar.appendChild(d);
+    };
     for(let e of enemies) {
-         const rel = e.mesh.position.clone().sub(player.mesh.position); rel.applyAxisAngle(new THREE.Vector3(0,1,0), -player.mesh.rotation.y);
-         let rx=rel.x*0.5, rz=rel.z*0.5, rd=Math.sqrt(rx*rx+rz*rz); if(rd>80){rx*=80/rd;rz*=80/rd;}
-         const d=document.createElement('div'); d.className='radar-dot'; d.style.left=(80+rx)+'px'; d.style.top=(80+rz)+'px'; ui.radar.appendChild(d);
+         const rel = e.mesh.position.clone().sub(player.mesh.position);
+         addDot(rel, 'radar-dot');
+    }
+    if(gameMode === GAME_MODES.ONLINE_VS) {
+        for(const id in remotePlayers) {
+            const rp = remotePlayers[id];
+            if(!rp) continue;
+            const rel = rp.mesh.position.clone().sub(player.mesh.position);
+            addDot(rel, 'radar-opponent');
+        }
     }
     for(let m of missiles) if(m.isEnemy) alert = true;
     ui.alert.style.display = alert ? 'block' : 'none';
