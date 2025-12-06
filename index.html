@@ -13,6 +13,18 @@
     <div id="markers-layer"></div>
 
     <div id="hud">
+        <!-- Top Left: Flight Info -->
+        <div id="hud-top-left">
+            <div class="hud-panel">
+                <span class="hud-label">THROTTLE //</span>
+                <span id="throttle-val" class="hud-value">0%</span>
+            </div>
+            <div class="hud-panel">
+                <span class="hud-label">ALTITUDE //</span>
+                <span id="alt-val" class="hud-value">0m</span>
+            </div>
+        </div>
+
         <!-- Top Right: Score -->
         <div id="hud-top-right">
             <div class="hud-panel">
@@ -44,6 +56,10 @@
         <!-- Center Alerts -->
         <div id="missile-alert">MISSILE INBOUND</div>
         <div id="message-area">TARGET LOCKED</div>
+        <div id="lock-indicator">
+            <div class="hud-label">LOCK //</div>
+            <div id="lock-progress">NO TARGET</div>
+        </div>
     </div>
     
     <div id="crosshair-wrapper">
