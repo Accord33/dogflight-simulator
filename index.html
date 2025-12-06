@@ -53,22 +53,48 @@
 
     <div id="menu-overlay">
         <h1>ACE WING</h1>
-        <div id="game-over-msg" style="grid-column:1/-1; text-align:center; color:#ff3333; display:none; font-size:2.5rem; margin-bottom:30px; text-shadow:0 0 20px red; letter-spacing:5px;">
-            <!-- Content will be populated by JS -->
-        </div>
-        
-        <div class="menu-container">
-            <div>
-                <h2 style="border-bottom:1px solid #fff; padding-bottom:10px;">OPERATIONS</h2>
-                <button class="stage-btn" onclick="startGame('OCEAN')"><span>OCEAN BLUE</span></button>
-                <button class="stage-btn" onclick="startGame('CITY')"><span>NEON CITY</span></button>
-                <button class="stage-btn" onclick="startGame('WASTELAND')"><span>RED CANYON</span></button>
+        <div id="title-screen" class="menu-section active">
+            <div class="menu-container">
+                <div style="grid-column:1/-1; text-align:center; letter-spacing:6px; text-shadow:0 0 15px #fff; opacity:0.85;">TACTICAL FLIGHT INTERFACE // READY</div>
+                <div style="grid-column:1/-1; text-align:center;">
+                    <button id="enter-world-select" class="stage-btn" style="max-width:400px; margin:40px auto 10px auto; text-align:center;"><span>ENTER OPS ROOM</span></button>
+                    <button id="title-to-world" class="stage-btn ghost-btn" style="max-width:400px; margin:0 auto; text-align:center;"><span>MISSION SELECT</span></button>
+                </div>
             </div>
-            <div>
-                <h2 style="border-bottom:1px solid #fff; padding-bottom:10px;">TOP ACES</h2>
-                <ul id="highscore-list" style="list-style:none; padding:0; font-size:1.2rem;">
-                    <li>Loading...</li>
-                </ul>
+        </div>
+
+        <div id="world-screen" class="menu-section">
+            <div class="menu-container">
+                <div>
+                    <h2 style="border-bottom:1px solid #fff; padding-bottom:10px;">OPERATIONS</h2>
+                    <button class="stage-btn" data-stage="OCEAN"><span>OCEAN BLUE</span></button>
+                    <button class="stage-btn" data-stage="CITY"><span>NEON CITY</span></button>
+                    <button class="stage-btn" data-stage="WASTELAND"><span>RED CANYON</span></button>
+                    <div class="menu-actions">
+                        <button class="stage-btn ghost-btn" id="world-to-title"><span>BACK TO TITLE</span></button>
+                    </div>
+                </div>
+                <div>
+                    <h2 style="border-bottom:1px solid #fff; padding-bottom:10px;">TOP ACES</h2>
+                    <ul id="highscore-list" style="list-style:none; padding:0; font-size:1.2rem;">
+                        <li>Loading...</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div id="result-screen" class="menu-section">
+            <div class="menu-container result-container">
+                <div class="result-block">
+                    <div class="hud-label" style="text-align:center;">MISSION REPORT //</div>
+                    <div id="result-score" class="hud-value" style="font-size:3rem; text-align:center;">0</div>
+                    <div id="result-rank" class="rank-badge">D</div>
+                </div>
+                <div class="menu-actions">
+                    <button id="retry-btn" class="stage-btn"><span>REDEPLOY</span></button>
+                    <button id="result-to-world" class="stage-btn ghost-btn"><span>MISSION SELECT</span></button>
+                    <button id="result-to-title" class="stage-btn ghost-btn"><span>TITLE</span></button>
+                </div>
             </div>
         </div>
     </div>

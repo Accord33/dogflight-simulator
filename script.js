@@ -35,6 +35,46 @@ const ui = {
     highScoreList: document.getElementById('highscore-list'),
     markersLayer: document.getElementById('markers-layer')
 };
+const screens = {
+    title: document.getElementById('title-screen'),
+    world: document.getElementById('world-screen'),
+    result: document.getElementById('result-screen')
+};
+const menuActions = {
+    enterWorld: document.getElementById('enter-world-select'),
+    titleToWorld: document.getElementById('title-to-world'),
+    worldToTitle: document.getElementById('world-to-title'),
+    retry: document.getElementById('retry-btn'),
+    resultToWorld: document.getElementById('result-to-world'),
+    resultToTitle: document.getElementById('result-to-title')
+};
+const resultUI = {
+    score: document.getElementById('result-score'),
+    rank: document.getElementById('result-rank')
+};
+
+function setScreen(target) {
+    if(target === 'playing') {
+        ui.menu.style.display = 'none';
+        Object.values(screens).forEach(s => s.classList.remove('active'));
+        return;
+    }
+    ui.menu.style.display = 'flex';
+    Object.entries(screens).forEach(([name, el]) => el.classList.toggle('active', name === target));
+}
+
+function getRank(s) {
+    const tiers = [
+        { min: 3000, rank: 'SSS' },
+        { min: 2000, rank: 'SS' },
+        { min: 1200, rank: 'S' },
+        { min: 800, rank: 'A' },
+        { min: 500, rank: 'B' },
+        { min: 200, rank: 'C' },
+        { min: 0, rank: 'D' }
+    ];
+    return tiers.find(t => s >= t.min)?.rank || 'D';
+}
 
 function init() {
     const container = document.getElementById('canvas-container');
@@ -57,6 +97,19 @@ function init() {
     window.addEventListener('resize', onResize);
 
     updateHighScoreDisplay();
+
+    // Menu bindings
+    if(menuActions.enterWorld) menuActions.enterWorld.addEventListener('click', () => setScreen('world'));
+    if(menuActions.titleToWorld) menuActions.titleToWorld.addEventListener('click', () => setScreen('world'));
+    if(menuActions.worldToTitle) menuActions.worldToTitle.addEventListener('click', () => setScreen('title'));
+    if(menuActions.retry) menuActions.retry.addEventListener('click', () => startGame(currentStage));
+    if(menuActions.resultToWorld) menuActions.resultToWorld.addEventListener('click', () => setScreen('world'));
+    if(menuActions.resultToTitle) menuActions.resultToTitle.addEventListener('click', () => setScreen('title'));
+    document.querySelectorAll('[data-stage]').forEach(btn => {
+        btn.addEventListener('click', () => startGame(btn.dataset.stage));
+    });
+
+    setScreen('title');
 }
 
 function startGame(stage) {
@@ -80,7 +133,7 @@ function startGame(stage) {
     muzzleFlashLight.position.set(0, 0, -3); // Near noise
 
     updateUI();
-    ui.menu.style.display = 'none';
+    setScreen('playing');
     ui.gameOverMsg.style.display = 'none';
 
     for(let i=0; i<10; i++) spawnEnemy();
@@ -105,8 +158,14 @@ function gameOver() {
         <div style="font-size: 1.5rem; margin-top: 15px; color: #ffffff;">SCORE: ${score}</div>
         <div style="font-size: 1.5rem; margin-top: 5px; color: #aaddff;">${rankText}</div>
     `;
-    ui.gameOverMsg.style.display = 'block';
-    ui.menu.style.display = 'flex';
+    ui.gameOverMsg.style.display = 'none';
+    showResult();
+}
+
+function showResult() {
+    resultUI.score.innerText = score;
+    resultUI.rank.innerText = getRank(score);
+    setScreen('result');
 }
 
 // --- Mechanics ---
