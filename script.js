@@ -10,6 +10,152 @@ const CONFIG = {
     fireRate: 80 // ms between shots
 };
 
+class SoundManager {
+    constructor() {
+        this.context = null;
+        this.buffers = new Map();
+        this.looping = new Map();
+        this._initContext();
+    }
+
+    _initContext() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if(!AudioContext) return;
+        this.context = new AudioContext();
+        const unlock = () => {
+            if(this.context && this.context.state === 'suspended') this.context.resume();
+            document.removeEventListener('pointerdown', unlock);
+            document.removeEventListener('keydown', unlock);
+        };
+        document.addEventListener('pointerdown', unlock, { once: true });
+        document.addEventListener('keydown', unlock, { once: true });
+    }
+
+    async loadAll(manifest) {
+        if(!this.context) return;
+        const jobs = Object.entries(manifest).map(async ([id, factory]) => {
+            if(typeof factory === 'function') {
+                const buf = await factory(this.context);
+                this.buffers.set(id, buf);
+                return;
+            }
+            return;
+        });
+        await Promise.all(jobs);
+    }
+
+    play(id, { volume = 1, loop = false, playbackRate = 1 } = {}) {
+        if(!this.context) return;
+        const buf = this.buffers.get(id);
+        if(!buf) return;
+        const src = this.context.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = playbackRate;
+        const gain = this.context.createGain();
+        gain.gain.value = volume;
+        src.connect(gain).connect(this.context.destination);
+        if(loop) {
+            this.stop(id);
+            src.loop = true;
+            this.looping.set(id, { src, gain });
+        }
+        src.start();
+        if(!loop) {
+            src.onended = () => {
+                src.disconnect();
+                gain.disconnect();
+            };
+        }
+        return src;
+    }
+
+    stop(id) {
+        const loop = this.looping.get(id);
+        if(loop) {
+            loop.src.stop();
+            loop.src.disconnect();
+            loop.gain.disconnect();
+            this.looping.delete(id);
+        }
+    }
+}
+
+const sounds = new SoundManager();
+
+function createToneBuffer(ctx, {
+    frequency = 440,
+    endFrequency = null,
+    duration = 0.2,
+    type = 'sine',
+    attack = 0.01,
+    release = 0.05,
+    volume = 0.8,
+    noise = false
+} = {}) {
+    const sr = ctx.sampleRate;
+    const len = Math.max(1, Math.floor(sr * duration));
+    const buffer = ctx.createBuffer(1, len, sr);
+    const data = buffer.getChannelData(0);
+    let phase = 0;
+    for(let i = 0; i < len; i++) {
+        const t = i / len;
+        const env = Math.min(1, i / Math.max(1, sr * attack)) * Math.min(1, (len - i) / Math.max(1, sr * release));
+        const freq = endFrequency ? frequency + (endFrequency - frequency) * t : frequency;
+        let sample;
+        if(noise) {
+            sample = (Math.random() * 2 - 1) * 0.7;
+        } else {
+            phase += 2 * Math.PI * freq / sr;
+            switch(type) {
+                case 'square': sample = Math.sign(Math.sin(phase)); break;
+                case 'sawtooth': sample = 2 * (phase / (2 * Math.PI) % 1) - 1; break;
+                case 'triangle': sample = Math.asin(Math.sin(phase)) * (2 / Math.PI); break;
+                default: sample = Math.sin(phase); break;
+            }
+        }
+        data[i] = sample * env * volume;
+    }
+    return buffer;
+}
+
+function concatBuffers(ctx, parts) {
+    const totalLength = parts.reduce((sum, buf) => sum + buf.length, 0);
+    const buffer = ctx.createBuffer(1, totalLength, ctx.sampleRate);
+    const out = buffer.getChannelData(0);
+    let offset = 0;
+    for(const part of parts) {
+        out.set(part.getChannelData(0), offset);
+        offset += part.length;
+    }
+    return buffer;
+}
+
+const SOUND_MANIFEST = {
+    uiClick: (ctx) => createToneBuffer(ctx, { frequency: 1300, duration: 0.07, type: 'square', attack: 0.005, release: 0.06, volume: 0.35 }),
+    uiHover: (ctx) => createToneBuffer(ctx, { frequency: 650, duration: 0.12, type: 'triangle', attack: 0.01, release: 0.08, volume: 0.3 }),
+    start: (ctx) => concatBuffers(ctx, [
+        createToneBuffer(ctx, { frequency: 440, endFrequency: 660, duration: 0.18, type: 'sawtooth', attack: 0.01, release: 0.07, volume: 0.35 }),
+        createToneBuffer(ctx, { frequency: 990, duration: 0.15, type: 'triangle', attack: 0.005, release: 0.08, volume: 0.25 })
+    ]),
+    bullet: (ctx) => createToneBuffer(ctx, { frequency: 2100, endFrequency: 1600, duration: 0.08, type: 'sawtooth', attack: 0.002, release: 0.05, volume: 0.35 }),
+    missile: (ctx) => concatBuffers(ctx, [
+        createToneBuffer(ctx, { frequency: 480, endFrequency: 220, duration: 0.2, type: 'sawtooth', attack: 0.01, release: 0.08, volume: 0.4 }),
+        createToneBuffer(ctx, { frequency: 160, duration: 0.25, type: 'triangle', attack: 0.02, release: 0.12, volume: 0.35 })
+    ]),
+    lock: (ctx) => createToneBuffer(ctx, { frequency: 1200, duration: 0.12, type: 'square', attack: 0.005, release: 0.08, volume: 0.35 }),
+    hit: (ctx) => createToneBuffer(ctx, { frequency: 320, duration: 0.18, type: 'triangle', attack: 0.003, release: 0.12, volume: 0.5, noise: true }),
+    alert: (ctx) => createToneBuffer(ctx, { frequency: 760, duration: 0.35, type: 'square', attack: 0.01, release: 0.2, volume: 0.25 }),
+    explosion: (ctx) => concatBuffers(ctx, [
+        createToneBuffer(ctx, { frequency: 90, duration: 0.35, type: 'triangle', attack: 0.01, release: 0.25, volume: 0.4, noise: true }),
+        createToneBuffer(ctx, { frequency: 40, duration: 0.25, type: 'sawtooth', attack: 0.01, release: 0.2, volume: 0.35 })
+    ]),
+    result: (ctx) => concatBuffers(ctx, [
+        createToneBuffer(ctx, { frequency: 740, duration: 0.18, type: 'triangle', attack: 0.01, release: 0.08, volume: 0.35 }),
+        createToneBuffer(ctx, { frequency: 880, duration: 0.2, type: 'triangle', attack: 0.01, release: 0.12, volume: 0.35 }),
+        createToneBuffer(ctx, { frequency: 990, duration: 0.24, type: 'triangle', attack: 0.01, release: 0.12, volume: 0.35 })
+    ])
+};
+
 // Globals
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
@@ -23,6 +169,7 @@ let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
 const scoreListKey = 'aceWingHighScores';
+let missileAlerting = false;
 
 // UI Refs
 const ui = {
@@ -80,7 +227,9 @@ function getRank(s) {
 
 function init() {
     const container = document.getElementById('canvas-container');
-    
+
+    sounds.loadAll(SOUND_MANIFEST);
+
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -110,6 +259,10 @@ function init() {
     document.querySelectorAll('[data-stage]').forEach(btn => {
         btn.addEventListener('click', () => startGame(btn.dataset.stage));
     });
+    document.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('pointerenter', () => sounds.play('uiHover', { volume: 0.3 }));
+        btn.addEventListener('click', () => sounds.play('uiClick', { volume: 0.35 }));
+    });
 
     setScreen('title');
 }
@@ -118,6 +271,9 @@ function startGame(stage) {
     currentStage = stage;
     isPlaying = true;
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
+    missileAlerting = false;
+    sounds.stop('alert');
+    sounds.play('start', { volume: 0.5 });
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
     bullets = []; missiles = []; enemies = []; particles = []; obstacles = [];
@@ -148,7 +304,9 @@ function gameOver() {
     isPlaying = false;
     saveScore(score);
     updateHighScoreDisplay();
-    
+    sounds.stop('alert');
+    missileAlerting = false;
+
     // Find rank
     let scores = JSON.parse(localStorage.getItem(scoreListKey) || '[]');
     let rank = scores.indexOf(score) + 1;
@@ -170,6 +328,7 @@ function showResult() {
     resultUI.rank.innerText = r;
     resultUI.rank.className = 'rank-badge';
     resultUI.rank.classList.add(`rank-${r}`);
+    sounds.play('result', { volume: 0.5 });
     setScreen('result');
 }
 
@@ -178,6 +337,7 @@ function fireBullet(source, isEnemy) {
     const now = Date.now();
     if(!isEnemy) {
         // Rate limit check handled in animate loop for player
+        sounds.play('bullet', { volume: 0.35 });
     } else {
         if (now - (source.lastShot||0) < 1000) return; // Enemy rate limit
         source.lastShot = now;
@@ -404,8 +564,12 @@ function fireMissile(source, isEnemy) {
             const a = pDir.angleTo(toE);
             if(a < minAngle) { target = e; minAngle = a; }
         });
-        if(target) showMessage("FOX 2", 800);
+        if(target) {
+            showMessage("FOX 2", 800);
+            sounds.play('lock', { volume: 0.35 });
+        }
     }
+    if(!isEnemy) sounds.play('missile', { volume: 0.45 });
     const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
     const missileColor = isEnemy ? 0xff3300 : 0xffffff;
@@ -441,6 +605,7 @@ function fireMissile(source, isEnemy) {
 }
 
 function createExplosion(pos, scale) {
+    sounds.play('explosion', { volume: Math.min(0.8, 0.3 + scale * 0.15) });
     for(let i=0; i<10; i++) {
         const geo = new THREE.BoxGeometry(0.8,0.8,0.8);
         const mat = new THREE.MeshBasicMaterial({color: Math.random()>0.3?0xffaa00:0xff3300});
@@ -587,7 +752,7 @@ function animate() {
             
             let hit = false;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); sounds.play('hit', { volume: 0.45 }); }
             } else {
                 for(let j=enemies.length-1; j>=0; j--) {
                     if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
@@ -656,6 +821,13 @@ function animate() {
     }
     for(let m of missiles) if(m.isEnemy) alert = true;
     ui.alert.style.display = alert ? 'block' : 'none';
+    if(alert && !missileAlerting) {
+        missileAlerting = true;
+        sounds.play('alert', { volume: 0.35, loop: true });
+    } else if(!alert && missileAlerting) {
+        sounds.stop('alert');
+        missileAlerting = false;
+    }
 
     if(armor <= 0) gameOver();
     updateUI();
