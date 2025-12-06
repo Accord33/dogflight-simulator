@@ -37,6 +37,18 @@ body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Orbitr
     position: absolute; top: 30px; right: 50px; text-align: right;
 }
 #score-val { font-size: 4rem; letter-spacing: 5px; }
+#lives-panel { margin-top: 10px; }
+#lives-val { font-size: 2.2rem; }
+
+#hud-top-left { position: absolute; top: 30px; left: 30px; }
+#net-badge {
+    padding: 8px 14px;
+    border: 1px solid rgba(255,255,255,0.3);
+    font-size: 0.9rem; letter-spacing: 3px; font-weight: 700;
+    background: rgba(255,255,255,0.05); color: #fff;
+    box-shadow: 0 0 12px rgba(255,255,255,0.2);
+    display: inline-block;
+}
 
 /* Bottom Left: Radar */
 #hud-bottom-left {
@@ -161,3 +173,18 @@ h1 { grid-column: 1 / -1; text-align: center; font-size: 5rem; margin: 0 0 30px 
 .rank-B   { color: #9be7ff; border-color: rgba(155,231,255,0.6); }
 .rank-C   { color: #d0d0d0; border-color: rgba(208,208,208,0.5); }
 .rank-D   { color: #888; border-color: rgba(136,136,136,0.4); }
+
+/* Online screen controls */
+.input-control {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 10px;
+    color: #fff;
+    font-family: 'Orbitron', sans-serif;
+    letter-spacing: 2px;
+    margin: 5px 0 15px 0;
+    outline: none;
+}
+.input-control:focus { border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.4); }
+#online-hint { margin-top: 10px; opacity: 0.7; font-size: 0.9rem; }

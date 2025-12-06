@@ -10,15 +10,29 @@ const CONFIG = {
     fireRate: 80 // ms between shots
 };
 
+const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
+const NET_DEFAULT_URL = 'ws://localhost:3001';
+
 // Globals
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
 let keys = { w: false, s: false, a: false, d: false, space: false };
 let mouse = { x: 0, y: 0, isDown: false };
+let enemyIdCounter = 0;
 
 let isPlaying = false;
 let currentStage = 'OCEAN';
+let gameMode = GAME_MODES.LOCAL;
+let isNetHost = false;
+let netClient = null;
+let netPlayerId = null;
+let netRoom = null;
+let remotePlayers = {};
+let lastNetStateSent = 0;
+let pendingEnemySnapshot = null;
+let lastEnemySnapshotTime = 0;
+let lives = 3;
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
@@ -35,24 +49,38 @@ const ui = {
     menu: document.getElementById('menu-overlay'),
     gameOverMsg: document.getElementById('game-over-msg'),
     highScoreList: document.getElementById('highscore-list'),
-    markersLayer: document.getElementById('markers-layer')
+    markersLayer: document.getElementById('markers-layer'),
+    netBadge: document.getElementById('net-badge'),
+    lives: document.getElementById('lives-val'),
+    livesPanel: document.getElementById('lives-panel')
 };
 const screens = {
     title: document.getElementById('title-screen'),
     world: document.getElementById('world-screen'),
-    result: document.getElementById('result-screen')
+    result: document.getElementById('result-screen'),
+    online: document.getElementById('online-screen')
 };
 const menuActions = {
     enterWorld: document.getElementById('enter-world-select'),
     titleToWorld: document.getElementById('title-to-world'),
+    titleToOnline: document.getElementById('title-to-online'),
+    onlineToTitle: document.getElementById('online-to-title'),
     worldToTitle: document.getElementById('world-to-title'),
     retry: document.getElementById('retry-btn'),
     resultToWorld: document.getElementById('result-to-world'),
-    resultToTitle: document.getElementById('result-to-title')
+    resultToTitle: document.getElementById('result-to-title'),
+    onlineStart: document.getElementById('online-start')
 };
 const resultUI = {
     score: document.getElementById('result-score'),
     rank: document.getElementById('result-rank')
+};
+const onlineUI = {
+    roomCode: document.getElementById('room-code'),
+    mode: document.getElementById('mode-select'),
+    stage: document.getElementById('stage-select'),
+    statusText: document.getElementById('net-status-text'),
+    roomText: document.getElementById('net-room-text')
 };
 
 function setScreen(target) {
@@ -103,21 +131,31 @@ function init() {
     // Menu bindings
     if(menuActions.enterWorld) menuActions.enterWorld.addEventListener('click', () => setScreen('world'));
     if(menuActions.titleToWorld) menuActions.titleToWorld.addEventListener('click', () => setScreen('world'));
+    if(menuActions.titleToOnline) menuActions.titleToOnline.addEventListener('click', () => setScreen('online'));
+    if(menuActions.onlineToTitle) menuActions.onlineToTitle.addEventListener('click', () => setScreen('title'));
     if(menuActions.worldToTitle) menuActions.worldToTitle.addEventListener('click', () => setScreen('title'));
-    if(menuActions.retry) menuActions.retry.addEventListener('click', () => startGame(currentStage));
+    if(menuActions.retry) menuActions.retry.addEventListener('click', () => startGame(currentStage, { mode: gameMode, isHost: isNetHost, roomCode: netRoom }));
     if(menuActions.resultToWorld) menuActions.resultToWorld.addEventListener('click', () => setScreen('world'));
     if(menuActions.resultToTitle) menuActions.resultToTitle.addEventListener('click', () => setScreen('title'));
+    if(menuActions.onlineStart) menuActions.onlineStart.addEventListener('click', () => handleOnlineStart());
     document.querySelectorAll('[data-stage]').forEach(btn => {
-        btn.addEventListener('click', () => startGame(btn.dataset.stage));
+        btn.addEventListener('click', () => startGame(btn.dataset.stage, { mode: GAME_MODES.LOCAL }));
     });
 
+    setupDefaultRoomCode();
+    setNetStatus('OFFLINE', 'offline');
     setScreen('title');
 }
 
-function startGame(stage) {
+function startGame(stage, opts = {}) {
     currentStage = stage;
+    gameMode = opts.mode || GAME_MODES.LOCAL;
+    isNetHost = !!opts.isHost;
+    netRoom = opts.roomCode || netRoom;
     isPlaying = true;
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
+    lives = (gameMode === GAME_MODES.ONLINE_VS) ? 3 : 1;
+    lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
     bullets = []; missiles = []; enemies = []; particles = []; obstacles = [];
@@ -125,7 +163,7 @@ function startGame(stage) {
 
     setupEnvironment(stage);
     
-    player = createPlayer();
+    player = createPlayer({ bodyColor: 0x607d8b, cockpitColor: 0xffd54f });
     scene.add(player.mesh);
     player.mesh.position.set(0, 50, 0);
 
@@ -138,7 +176,9 @@ function startGame(stage) {
     setScreen('playing');
     ui.gameOverMsg.style.display = 'none';
 
-    for(let i=0; i<10; i++) spawnEnemy();
+    if(gameMode !== GAME_MODES.ONLINE_VS && (gameMode !== GAME_MODES.ONLINE_COOP || isNetHost)) {
+        for(let i=0; i<10; i++) spawnEnemy();
+    }
     
     animate();
 }
@@ -173,8 +213,120 @@ function showResult() {
     setScreen('result');
 }
 
+function setupDefaultRoomCode() {
+    if(!onlineUI.roomCode) return;
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for(let i=0; i<4; i++) code += alphabet[Math.floor(Math.random()*alphabet.length)];
+    onlineUI.roomCode.value = code;
+}
+
+async function handleOnlineStart() {
+    if(!onlineUI.roomCode || !onlineUI.mode || !onlineUI.stage) return;
+    const room = (onlineUI.roomCode.value || '').toUpperCase().trim() || 'ACE';
+    const mode = onlineUI.mode.value;
+    const stage = onlineUI.stage.value;
+    try {
+        setNetStatus(`CONNECTING ${room}`, 'pending');
+        if(!netClient) netClient = new NetClient(NET_DEFAULT_URL);
+        const info = await netClient.connect({ room, mode, stage });
+        netPlayerId = info.playerId;
+        isNetHost = info.isHost;
+        netRoom = info.room;
+        gameMode = info.mode || mode;
+        const chosenStage = info.stage || stage;
+        setNetStatus(`ROOM ${netRoom}`, 'online');
+        startGame(chosenStage, { mode: gameMode, isHost: isNetHost, roomCode: netRoom });
+    } catch(err) {
+        console.error(err);
+        setNetStatus('FAILED', 'offline');
+        showMessage('CONNECT FAILED', 1200);
+    }
+}
+
+function setNetStatus(text, state) {
+    if(onlineUI.statusText) onlineUI.statusText.innerText = text;
+    if(onlineUI.roomText) onlineUI.roomText.innerText = `ROOM ${netRoom || '--'}`;
+    if(ui.netBadge) {
+        ui.netBadge.innerText = (state === 'online') ? text : 'OFFLINE';
+        ui.netBadge.style.borderColor = state === 'online' ? 'rgba(0,255,140,0.7)' : 'rgba(255,255,255,0.3)';
+        ui.netBadge.style.boxShadow = state === 'online' ? '0 0 12px rgba(0,255,140,0.5)' : '0 0 12px rgba(255,255,255,0.2)';
+    }
+}
+
+function sendNet(type, payload) {
+    if(netClient && netClient.isOpen()) {
+        netClient.send(type, payload);
+    }
+}
+
+class NetClient {
+    constructor(url) {
+        this.url = url;
+        this.ws = null;
+    }
+    isOpen() {
+        return this.ws && this.ws.readyState === WebSocket.OPEN;
+    }
+    connect({ room, mode, stage }) {
+        return new Promise((resolve, reject) => {
+            if(this.ws) {
+                this.ws.close();
+            }
+            this.ws = new WebSocket(this.url);
+            const ws = this.ws;
+            let welcomed = false;
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ type: 'join', room, mode, stage }));
+            };
+            ws.onmessage = (ev) => {
+                let msg;
+                try { msg = JSON.parse(ev.data); } catch(e) { return; }
+                if(msg.type === 'welcome') {
+                    welcomed = true;
+                    resolve(msg);
+                    return;
+                }
+                this.routeMessage(msg);
+            };
+            ws.onerror = (e) => {
+                if(!welcomed) reject(e);
+            };
+            ws.onclose = () => {
+                if(!welcomed) reject(new Error('Disconnected'));
+                setNetStatus('OFFLINE', 'offline');
+            };
+        });
+    }
+    send(type, payload) {
+        if(!this.isOpen()) return;
+        this.ws.send(JSON.stringify({ ...payload, type }));
+    }
+    routeMessage(msg) {
+        switch(msg.type) {
+            case 'state': applyRemoteState(msg); break;
+            case 'action': handleRemoteAction(msg); break;
+            case 'hit': handleRemoteHit(msg); break;
+            case 'player-join': showMessage('ALLY CONNECTED', 800); break;
+            case 'player-leave': removeRemotePlayer(msg.playerId); break;
+            case 'host-grant':
+                isNetHost = true;
+                if(gameMode === GAME_MODES.ONLINE_COOP && enemies.length === 0) {
+                    for(let i=0; i<10; i++) spawnEnemy();
+                }
+                break;
+            case 'enemySnapshot': applyEnemySnapshot(msg); break;
+            case 'error':
+                showMessage(msg.message || 'NET ERROR', 1200);
+                setNetStatus('ERROR', 'offline');
+                break;
+            default: break;
+        }
+    }
+}
+
 // --- Mechanics ---
-function fireBullet(source, isEnemy) {
+function fireBullet(source, isEnemy, opts = {}) {
     const now = Date.now();
     if(!isEnemy) {
         // Rate limit check handled in animate loop for player
@@ -210,21 +362,32 @@ function fireBullet(source, isEnemy) {
         glow.scale.set(1, 1, 2.4);
         b.add(glow);
     }
-    b.position.copy(source.mesh.position);
+    const spawnPos = opts.position || source.mesh.position.clone();
+    const spawnQuat = opts.quaternion || source.mesh.quaternion.clone();
+    b.position.copy(spawnPos);
     
     // Adjust spawn pos slightly
     b.position.y -= 0.2; 
     
-    b.quaternion.copy(source.mesh.quaternion);
+    b.quaternion.copy(spawnQuat);
     b.translateZ(-2);
     scene.add(b);
-    bullets.push({ mesh: b, life: 80, isEnemy: isEnemy });
+    bullets.push({ mesh: b, life: 80, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
 
     // Visuals
-    if(!isEnemy) {
+    if(!isEnemy && source === player) {
         // Flash ON
         muzzleFlashLight.intensity = 5.0;
         setTimeout(() => { muzzleFlashLight.intensity = 0; }, 50); // Flash off quickly
+    }
+
+    if(gameMode !== GAME_MODES.LOCAL && !opts.fromRemote) {
+        sendNet('action', {
+            action: 'fireBullet',
+            isEnemy: isEnemy,
+            position: { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z },
+            quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w }
+        });
     }
 }
 
@@ -326,10 +489,10 @@ function createRocks() {
     }
 }
 
-function createPlayer() {
+function createPlayer(options = {}) {
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x607d8b, roughness: 0.6, flatShading: true });
-    const cockpitMat = new THREE.MeshStandardMaterial({ color: 0xffd54f, roughness: 0.2, emissive: 0xffb300, emissiveIntensity: 0.2 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: options.bodyColor || 0x607d8b, roughness: 0.6, flatShading: true });
+    const cockpitMat = new THREE.MeshStandardMaterial({ color: options.cockpitColor || 0xffd54f, roughness: 0.2, emissive: options.cockpitColor || 0xffb300, emissiveIntensity: 0.2 });
     const body = new THREE.Mesh(new THREE.ConeGeometry(0.8, 4, 6), bodyMat);
     body.rotateX(Math.PI / 2); group.add(body);
     const engine = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 2), bodyMat);
@@ -345,8 +508,11 @@ function createPlayer() {
     lWing.rotation.x = Math.PI/2; lWing.rotation.z = -Math.PI/2; lWing.position.set(-1.4,0,0.5); group.add(lWing);
     const rWing = lWing.clone(); rWing.rotation.z = Math.PI/2; rWing.rotation.y = Math.PI; rWing.position.set(1.4,0,0.5); group.add(rWing);
     
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color:0x00ffff, transparent:true, opacity:0.8}));
-    flame.rotateX(-Math.PI/2); flame.position.z = 4; group.add(flame);
+    let flame = null;
+    if(!options.disableFlame) {
+        flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color: options.flameColor || 0x00ffff, transparent:true, opacity:0.8}));
+        flame.rotateX(-Math.PI/2); flame.position.z = 4; group.add(flame);
+    }
     return { mesh: group, speed: CONFIG.playerSpeedMin, flame: flame };
 }
 
@@ -365,19 +531,115 @@ function createEnemy() {
     return { mesh: group, speed: CONFIG.enemySpeed, lastShot: 0 };
 }
 
+function ensureRemotePlayer(id) {
+    if(remotePlayers[id]) return remotePlayers[id];
+    const rp = createPlayer({ bodyColor: 0xff7043, cockpitColor: 0xffccbc, flameColor: 0xffab91 });
+    rp.id = id;
+    rp.armor = 100;
+    rp.score = 0;
+    scene.add(rp.mesh);
+    remotePlayers[id] = rp;
+    return rp;
+}
+
+function removeRemotePlayer(id) {
+    const rp = remotePlayers[id];
+    if(!rp) return;
+    scene.remove(rp.mesh);
+    delete remotePlayers[id];
+}
+
+function applyRemoteState(msg) {
+    if(!msg.playerId || msg.playerId === netPlayerId) return;
+    const rp = ensureRemotePlayer(msg.playerId);
+    if(msg.pos) rp.mesh.position.set(msg.pos.x, msg.pos.y, msg.pos.z);
+    if(msg.rot) rp.mesh.quaternion.set(msg.rot.x, msg.rot.y, msg.rot.z, msg.rot.w);
+    rp.speed = msg.speed || CONFIG.playerSpeedMin;
+    if(rp.flame) rp.flame.scale.z = rp.speed * 2;
+    if(typeof msg.armor === 'number') rp.armor = msg.armor;
+    if(typeof msg.score === 'number') rp.score = msg.score;
+    if(typeof msg.lives === 'number') rp.lives = msg.lives;
+}
+
+function handleRemoteAction(msg) {
+    if(!msg.playerId || msg.playerId === netPlayerId) return;
+    const rp = ensureRemotePlayer(msg.playerId);
+    const spawnPos = msg.position ? new THREE.Vector3(msg.position.x, msg.position.y, msg.position.z) : rp.mesh.position.clone();
+    const quat = msg.quaternion ? new THREE.Quaternion(msg.quaternion.x, msg.quaternion.y, msg.quaternion.z, msg.quaternion.w) : rp.mesh.quaternion.clone();
+    if(msg.action === 'fireBullet') {
+        const asEnemy = gameMode === GAME_MODES.ONLINE_VS;
+        fireBullet(rp, asEnemy, { fromRemote: true, ownerId: msg.playerId, position: spawnPos, quaternion: quat });
+    }
+    if(msg.action === 'fireMissile') {
+        const asEnemy = gameMode === GAME_MODES.ONLINE_VS;
+        fireMissile(rp, asEnemy, { fromRemote: true, ownerId: msg.playerId, position: spawnPos, quaternion: quat });
+    }
+    if(msg.action === 'gameOver') {
+        showMessage('OPPONENT DOWN', 1200);
+    }
+}
+
+function handleRemoteHit(msg) {
+    if(msg.targetId && msg.targetId === netPlayerId) {
+        armor -= msg.amount || 0;
+        if(armor < 0) armor = 0;
+        showMessage('HIT', 500);
+    }
+}
+
+function applyEnemySnapshot(snapshot) {
+    if(!snapshot || isNetHost) return;
+    pendingEnemySnapshot = snapshot;
+}
+
+function syncEnemiesFromSnapshot(snapshot) {
+    if(!snapshot) return;
+    if(typeof snapshot.teamScore === 'number') {
+        score = snapshot.teamScore;
+        updateUI();
+    }
+    const ids = new Set();
+    snapshot.enemies.forEach(es => {
+        ids.add(es.id);
+        let e = enemies.find(en => en.id === es.id);
+        if(!e) {
+            e = createEnemy();
+            e.id = es.id;
+            e.hp = es.hp || 1;
+            scene.add(e.mesh);
+            enemies.push(e);
+            attachEnemyMarker(e);
+        }
+        e.mesh.position.set(es.x, es.y, es.z);
+    });
+    for(let i=enemies.length-1; i>=0; i--) {
+        if(!ids.has(enemies[i].id)) {
+            if(enemies[i].marker) enemies[i].marker.remove();
+            scene.remove(enemies[i].mesh);
+            enemies.splice(i,1);
+        }
+    }
+    pendingEnemySnapshot = null;
+}
+
 function spawnEnemy() {
     const e = createEnemy();
+    e.id = ++enemyIdCounter;
+    e.hp = 1;
     const angle = Math.random() * Math.PI * 2;
     const dist = 150 + Math.random() * 200;
     e.mesh.position.set(player.mesh.position.x + Math.cos(angle)*dist, 50, player.mesh.position.z + Math.sin(angle)*dist);
     scene.add(e.mesh);
     enemies.push(e);
-    
+    attachEnemyMarker(e);
+}
+
+function attachEnemyMarker(enemy) {
     const marker = document.createElement('div');
     marker.className = 'enemy-marker';
     marker.innerHTML = `<span class="marker-dist">0m</span>`;
     ui.markersLayer.appendChild(marker);
-    e.marker = marker;
+    enemy.marker = marker;
 }
 
 function startMissileReload() {
@@ -385,8 +647,8 @@ function startMissileReload() {
     missileReloadEndTime = Date.now() + CONFIG.missileReloadTimeMs;
 }
 
-function fireMissile(source, isEnemy) {
-    if(!isEnemy) {
+function fireMissile(source, isEnemy, opts = {}) {
+    if(!isEnemy && !opts.fromRemote) {
         if(missileCount <= 0 || !isPlaying) return;
         const now = Date.now();
         if(now - lastMissileTime < 1000) return;
@@ -398,13 +660,13 @@ function fireMissile(source, isEnemy) {
     let target = isEnemy ? player : null;
     if(!isEnemy) {
         let minAngle = 0.5;
-        const pDir = new THREE.Vector3(0,0,-1).applyQuaternion(player.mesh.quaternion);
+        const pDir = new THREE.Vector3(0,0,-1).applyQuaternion(source.mesh.quaternion);
         enemies.forEach(e => {
-            const toE = new THREE.Vector3().subVectors(e.mesh.position, player.mesh.position).normalize();
+            const toE = new THREE.Vector3().subVectors(e.mesh.position, source.mesh.position).normalize();
             const a = pDir.angleTo(toE);
             if(a < minAngle) { target = e; minAngle = a; }
         });
-        if(target) showMessage("FOX 2", 800);
+        if(target && !opts.fromRemote) showMessage("FOX 2", 800);
     }
     const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
@@ -433,11 +695,22 @@ function fireMissile(source, isEnemy) {
         glow.scale.set(1, 1, 2);
         m.add(glow);
     }
-    m.position.copy(source.mesh.position); m.position.y -= 0.5;
-    m.quaternion.copy(source.mesh.quaternion);
+    const spawnPos = opts.position || source.mesh.position.clone();
+    const spawnQuat = opts.quaternion || source.mesh.quaternion.clone();
+    m.position.copy(spawnPos); m.position.y -= 0.5;
+    m.quaternion.copy(spawnQuat);
     scene.add(m);
-    const missileSpeed = player.speed * CONFIG.missileSpeedMultiplier;
-    missiles.push({ mesh: m, target: target, life: 300, speed: missileSpeed, isEnemy: isEnemy });
+    const missileSpeed = (source.speed || player.speed) * CONFIG.missileSpeedMultiplier;
+    missiles.push({ mesh: m, target: target, life: 300, speed: missileSpeed, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
+
+    if(gameMode !== GAME_MODES.LOCAL && !opts.fromRemote) {
+        sendNet('action', {
+            action: 'fireMissile',
+            isEnemy: isEnemy,
+            position: { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z },
+            quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w }
+        });
+    }
 }
 
 function createExplosion(pos, scale) {
@@ -472,6 +745,15 @@ function updateUI() {
         ui.missile.innerText = missileCount;
         ui.missile.classList.remove('reloading');
     }
+    if(ui.lives) {
+        if(gameMode === GAME_MODES.ONLINE_VS) {
+            ui.lives.innerText = lives;
+            if(ui.livesPanel) ui.livesPanel.style.display = 'block';
+        } else {
+            ui.lives.innerText = '—';
+            if(ui.livesPanel) ui.livesPanel.style.display = 'none';
+        }
+    }
 }
 function saveScore(s) {
     let sc = JSON.parse(localStorage.getItem(scoreListKey)||'[]'); sc.push(s);
@@ -505,6 +787,26 @@ function onResize() {
 function animate() {
     if(!isPlaying) { renderer.render(scene, camera); return; }
     requestAnimationFrame(animate);
+
+    if(pendingEnemySnapshot && gameMode === GAME_MODES.ONLINE_COOP && !isNetHost) {
+        syncEnemiesFromSnapshot(pendingEnemySnapshot);
+    }
+
+    if(gameMode !== GAME_MODES.LOCAL && netClient && netClient.isOpen()) {
+        const now = Date.now();
+        if(now - lastNetStateSent > 80) {
+            const p = player.mesh.position, q = player.mesh.quaternion;
+            sendNet('state', {
+                pos: { x: p.x, y: p.y, z: p.z },
+                rot: { x: q.x, y: q.y, z: q.z, w: q.w },
+                speed: player.speed,
+                armor: armor,
+                score: score,
+                lives: lives
+            });
+            lastNetStateSent = now;
+        }
+    }
 
     // --- 1. CONTINUOUS FIRE LOGIC ---
     if(mouse.isDown) {
@@ -554,6 +856,8 @@ function animate() {
     }
 
     // Bullets/Missiles
+    const allowEnemyDamage = (gameMode === GAME_MODES.LOCAL || (gameMode === GAME_MODES.ONLINE_COOP && isNetHost));
+    const isVs = gameMode === GAME_MODES.ONLINE_VS;
     [bullets, missiles].forEach(arr => {
         for(let i=arr.length-1; i>=0; i--) {
             const p = arr[i];
@@ -589,12 +893,23 @@ function animate() {
             if(p.isEnemy) {
                 if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); }
             } else {
-                for(let j=enemies.length-1; j>=0; j--) {
-                    if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
-                        hit = true; createExplosion(enemies[j].mesh.position, 3);
-                        if(enemies[j].marker) enemies[j].marker.remove();
-                        scene.remove(enemies[j].mesh); enemies.splice(j, 1);
-                        score += 100; setTimeout(spawnEnemy, 2000);
+                if(isVs) {
+                    for(const id in remotePlayers) {
+                        const rp = remotePlayers[id];
+                        if(rp && rp.mesh.position.distanceTo(p.mesh.position) < 3) {
+                            hit = true; createExplosion(rp.mesh.position, 3);
+                            sendNet('hit', { targetId: id, amount: 10 });
+                        }
+                    }
+                }
+                if(allowEnemyDamage) {
+                    for(let j=enemies.length-1; j>=0; j--) {
+                        if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
+                            hit = true; createExplosion(enemies[j].mesh.position, 3);
+                            if(enemies[j].marker) enemies[j].marker.remove();
+                            scene.remove(enemies[j].mesh); enemies.splice(j, 1);
+                            score += 100; setTimeout(spawnEnemy, 2000);
+                        }
                     }
                 }
             }
@@ -604,28 +919,28 @@ function animate() {
     });
 
     // Enemies (RELAXED ATTACK LOGIC)
+    const runEnemies = (gameMode === GAME_MODES.LOCAL) || (gameMode === GAME_MODES.ONLINE_COOP && isNetHost);
     let alert = false;
     for(let i=enemies.length-1; i>=0; i--) {
         const e = enemies[i];
         const toP = new THREE.Vector3().subVectors(player.mesh.position, e.mesh.position);
         const dist = toP.length();
 
-        if(dist > 2500) {
-            if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); spawnEnemy(); continue;
-        }
+        if(runEnemies) {
+            if(dist > 2500) {
+                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); spawnEnemy(); continue;
+            }
 
-        toP.y = 0; toP.normalize();
-        e.mesh.position.y = 50; e.mesh.rotation.x = 0; e.mesh.rotation.z = 0;
-        e.mesh.quaternion.slerp(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.atan2(toP.x, toP.z)+Math.PI), 0.03);
-        e.mesh.translateZ(e.speed);
+            toP.y = 0; toP.normalize();
+            e.mesh.position.y = 50; e.mesh.rotation.x = 0; e.mesh.rotation.z = 0;
+            e.mesh.quaternion.slerp(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.atan2(toP.x, toP.z)+Math.PI), 0.03);
+            e.mesh.translateZ(e.speed);
 
-        // Attack logic: Removed strict angle check. Now just distance check.
-        // Will shoot if somewhat close, regardless of angle, to ensure activity.
-        if(dist < 800) {
-             const now = Date.now();
-             // High chance to shoot if close
-             if(now - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = now; }
-             if(Math.random() < 0.005 && dist > 100) fireMissile(e, true);
+            if(dist < 800) {
+                 const now = Date.now();
+                 if(now - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = now; }
+                 if(Math.random() < 0.005 && dist > 100) fireMissile(e, true);
+            }
         }
 
         if(e.marker) {
@@ -636,6 +951,23 @@ function animate() {
                 e.marker.style.top=((-p.y*.5+.5)*window.innerHeight)+'px';
                 e.marker.querySelector('.marker-dist').innerText=Math.floor(dist)+'m';
             } else e.marker.style.display='none';
+        }
+    }
+
+    if(runEnemies && gameMode === GAME_MODES.ONLINE_COOP && netClient && netClient.isOpen()) {
+        const now = Date.now();
+        if(now - lastEnemySnapshotTime > 200) {
+            sendNet('enemySnapshot', {
+                enemies: enemies.map(en => ({
+                    id: en.id,
+                    x: en.mesh.position.x,
+                    y: en.mesh.position.y,
+                    z: en.mesh.position.z,
+                    hp: en.hp || 1
+                })),
+                teamScore: score
+            });
+            lastEnemySnapshotTime = now;
         }
     }
 
@@ -657,7 +989,25 @@ function animate() {
     for(let m of missiles) if(m.isEnemy) alert = true;
     ui.alert.style.display = alert ? 'block' : 'none';
 
-    if(armor <= 0) gameOver();
+    if(armor <= 0) {
+        if(gameMode === GAME_MODES.ONLINE_VS) {
+            if(lives > 1) {
+                lives--;
+                armor = 100;
+                missileCount = CONFIG.missileCapacity;
+                player.speed = CONFIG.playerSpeedMin;
+                player.mesh.position.set(0, 50, 0);
+                player.mesh.rotation.set(0, 0, 0);
+                showMessage(`RESPAWN - LIVES ${lives}`, 1000);
+                updateUI();
+            } else {
+                sendNet('action', { action: 'gameOver' });
+                gameOver();
+            }
+        } else {
+            gameOver();
+        }
+    }
     updateUI();
     renderer.render(scene, camera);
 }
