@@ -93,6 +93,7 @@ function createToneBuffer(ctx, {
     noise = false
 } = {}) {
     const sr = ctx.sampleRate;
+    const driveAmt = Math.max(0.0001, drive);
     const len = Math.max(1, Math.floor(sr * duration));
     const buffer = ctx.createBuffer(1, len, sr);
     const data = buffer.getChannelData(0);
@@ -141,7 +142,7 @@ function createShapedNoiseBuffer(ctx, {
         hpState += (white - hpState) * (1 - hpCoeff);
         const highPassed = white - hpState;
         lpState += (highPassed - lpState) * (1 - lpCoeff);
-        const shaped = Math.tanh(lpState * drive) / Math.tanh(drive);
+        const shaped = Math.tanh(lpState * driveAmt) / Math.tanh(driveAmt);
         data[i] = shaped * env * volume;
     }
     return buffer;
@@ -619,7 +620,7 @@ function fireMissile(source, isEnemy) {
             sounds.play('lock', { volume: 0.35 });
         }
     }
-    if(!isEnemy) sounds.play('missile', { volume: 0.45 });
+    if(!isEnemy) sounds.play('missile', { volume: 0.6, playbackRate: 0.94 + Math.random() * 0.12 });
     const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
     const missileColor = isEnemy ? 0xff3300 : 0xffffff;
@@ -655,7 +656,7 @@ function fireMissile(source, isEnemy) {
 }
 
 function createExplosion(pos, scale) {
-    sounds.play('explosion', { volume: Math.min(0.8, 0.3 + scale * 0.15) });
+    sounds.play('explosion', { volume: Math.min(0.8, 0.3 + scale * 0.15), playbackRate: 0.92 + Math.random() * 0.16 });
     for(let i=0; i<10; i++) {
         const geo = new THREE.BoxGeometry(0.8,0.8,0.8);
         const mat = new THREE.MeshBasicMaterial({color: Math.random()>0.3?0xffaa00:0xff3300});
@@ -802,7 +803,7 @@ function animate() {
             
             let hit = false;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); sounds.play('hit', { volume: 0.45 }); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); sounds.play('hit', { volume: 0.55, playbackRate: 0.9 + Math.random() * 0.2 }); }
             } else {
                 for(let j=enemies.length-1; j>=0; j--) {
                     if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
