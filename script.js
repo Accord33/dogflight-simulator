@@ -119,10 +119,33 @@ function fireBullet(source, isEnemy) {
         source.lastShot = now;
     }
 
-    const geo = new THREE.BoxGeometry(0.15, 0.15, 3.0); // Longer bullets
-    const color = isEnemy ? 0xffaa00 : 0xff6600; // Player bullet changed to glowing orange
-    const mat = new THREE.MeshBasicMaterial({ color: color });
+    const geo = new THREE.CylinderGeometry(0.12, 0.18, 3.4, 10); // Brighter, thicker round
+    geo.rotateX(Math.PI/2);
+    const color = isEnemy ? 0xff5522 : 0xfff3a1;
+    const mat = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: isEnemy ? 0.9 : 1.0,
+        blending: isEnemy ? THREE.NormalBlending : THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false
+    });
     const b = new THREE.Mesh(geo, mat);
+    if(!isEnemy) {
+        const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(0.32, 10, 10),
+            new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.35,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                fog: false
+            })
+        );
+        glow.scale.set(1, 1, 2.4);
+        b.add(glow);
+    }
     b.position.copy(source.mesh.position);
     
     // Adjust spawn pos slightly
@@ -313,9 +336,33 @@ function fireMissile(source, isEnemy) {
         });
         if(target) showMessage("FOX 2", 800);
     }
-    const geo = new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6);
+    const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
-    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color: isEnemy?0xff0000:0xffffff}));
+    const missileColor = isEnemy ? 0xff3300 : 0xffffff;
+    const missileMat = new THREE.MeshBasicMaterial({
+        color: missileColor,
+        transparent: true,
+        opacity: 0.95,
+        blending: isEnemy ? THREE.NormalBlending : THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false
+    });
+    const m = new THREE.Mesh(geo, missileMat);
+    if(!isEnemy) {
+        const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(0.3, 10, 10),
+            new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.4,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                fog: false
+            })
+        );
+        glow.scale.set(1, 1, 2);
+        m.add(glow);
+    }
     m.position.copy(source.mesh.position); m.position.y -= 0.5;
     m.quaternion.copy(source.mesh.quaternion);
     scene.add(m);
@@ -437,6 +484,21 @@ function animate() {
                 const t = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3), new THREE.MeshBasicMaterial({color:0xcccccc, transparent:true, opacity:0.4}));
                 t.position.copy(p.mesh.position).add(new THREE.Vector3((Math.random()-.5)*.2,(Math.random()-.5)*.2,(Math.random()-.5)*.2));
                 scene.add(t); particles.push({mesh:t, vel:new THREE.Vector3(0,0,0), life:15, maxLife:15});
+            }
+            if(arr === bullets && !p.isEnemy && p.life % 2 === 0) {
+                const t = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.18, 6, 6),
+                    new THREE.MeshBasicMaterial({
+                        color: 0xfff1a1,
+                        transparent: true,
+                        opacity: 0.45,
+                        blending: THREE.AdditiveBlending,
+                        depthWrite: false,
+                        fog: false
+                    })
+                );
+                t.position.copy(p.mesh.position);
+                scene.add(t); particles.push({mesh:t, vel:new THREE.Vector3(0,0,0), life:12, maxLife:12});
             }
             
             let hit = false;
