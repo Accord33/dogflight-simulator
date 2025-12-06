@@ -36,6 +36,7 @@ let lives = 3;
 let waitingForOpponent = false;
 let pendingStage = null;
 const RADAR_RANGE = 500; // meters
+let stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
@@ -80,7 +81,12 @@ const menuActions = {
 };
 const resultUI = {
     score: document.getElementById('result-score'),
-    rank: document.getElementById('result-rank')
+    rank: document.getElementById('result-rank'),
+    outcome: document.getElementById('result-outcome'),
+    dmgDealt: document.getElementById('stat-dmg-dealt'),
+    dmgTaken: document.getElementById('stat-dmg-taken'),
+    kills: document.getElementById('stat-kills'),
+    deaths: document.getElementById('stat-deaths')
 };
 const onlineUI = {
     roomCode: document.getElementById('room-code'),
@@ -164,6 +170,7 @@ function startGame(stage, opts = {}) {
     isPlaying = true;
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
     lives = (gameMode === GAME_MODES.ONLINE_VS) ? 3 : 1;
+    stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
     lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
@@ -192,33 +199,31 @@ function startGame(stage, opts = {}) {
     animate();
 }
 
-function gameOver() {
+function gameOver(outcome='LOSE') {
     if(!isPlaying) return;
     isPlaying = false;
-    saveScore(score);
-    updateHighScoreDisplay();
-    
-    // Find rank
-    let scores = JSON.parse(localStorage.getItem(scoreListKey) || '[]');
-    let rank = scores.indexOf(score) + 1;
-    let rankText = rank > 0 ? `RANK ${rank}` : 'NOT RANKED';
-
-    // Update game over message with score and rank
-    ui.gameOverMsg.innerHTML = `
-        <div>MISSION FAILED</div>
-        <div style="font-size: 1.5rem; margin-top: 15px; color: #ffffff;">SCORE: ${score}</div>
-        <div style="font-size: 1.5rem; margin-top: 5px; color: #aaddff;">${rankText}</div>
-    `;
+    if(gameMode !== GAME_MODES.ONLINE_VS) {
+        saveScore(score);
+        updateHighScoreDisplay();
+    }
     ui.gameOverMsg.style.display = 'none';
-    showResult();
+    showResult(outcome);
 }
 
-function showResult() {
+function showResult(outcome='LOSE') {
     resultUI.score.innerText = score;
     const r = getRank(score);
     resultUI.rank.innerText = r;
     resultUI.rank.className = 'rank-badge';
     resultUI.rank.classList.add(`rank-${r}`);
+    if(resultUI.outcome) {
+        resultUI.outcome.innerText = outcome === 'WIN' ? 'WINNER' : (outcome === 'DRAW' ? 'DRAW' : 'LOSER');
+        resultUI.outcome.style.color = outcome === 'WIN' ? '#7CFFB2' : (outcome === 'DRAW' ? '#fff' : '#ff6666');
+    }
+    if(resultUI.dmgDealt) resultUI.dmgDealt.innerText = stats.damageDealt;
+    if(resultUI.dmgTaken) resultUI.dmgTaken.innerText = stats.damageTaken;
+    if(resultUI.kills) resultUI.kills.innerText = stats.kills;
+    if(resultUI.deaths) resultUI.deaths.innerText = stats.deaths;
     setScreen('result');
 }
 
@@ -642,7 +647,13 @@ function handleRemoteAction(msg) {
         fireMissile(rp, asEnemy, { fromRemote: true, ownerId: msg.playerId, position: spawnPos, quaternion: quat });
     }
     if(msg.action === 'gameOver') {
-        showMessage('OPPONENT DOWN', 1200);
+        const loserId = msg.loserId || msg.playerId;
+        if(loserId === netPlayerId) {
+            if(isPlaying) gameOver('LOSE');
+        } else {
+            stats.kills += 1;
+            if(isPlaying) gameOver('WIN');
+        }
     }
 }
 
@@ -651,6 +662,7 @@ function handleRemoteHit(msg) {
         armor -= msg.amount || 0;
         if(armor < 0) armor = 0;
         showMessage('HIT', 500);
+        stats.damageTaken += msg.amount || 0;
     }
 }
 
@@ -978,7 +990,7 @@ function animate() {
             
             let hit = false;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; stats.damageTaken += 10; createExplosion(p.mesh.position, 1); }
             } else {
                 if(isVs) {
                     for(const id in remotePlayers) {
@@ -986,6 +998,7 @@ function animate() {
                         if(rp && rp.mesh.position.distanceTo(p.mesh.position) < 3) {
                             hit = true; createExplosion(rp.mesh.position, 3);
                             sendNet('hit', { targetId: id, amount: 10 });
+                            stats.damageDealt += 10;
                         }
                     }
                 }
@@ -1119,11 +1132,12 @@ function animate() {
                 showMessage(`RESPAWN - LIVES ${lives}`, 1000);
                 updateUI();
             } else {
-                sendNet('action', { action: 'gameOver' });
-                gameOver();
+                stats.deaths += 1;
+                sendNet('action', { action: 'gameOver', loserId: netPlayerId });
+                gameOver('LOSE');
             }
         } else {
-            gameOver();
+            gameOver('LOSE');
         }
     }
     updateUI();
