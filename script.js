@@ -164,7 +164,10 @@ function gameOver() {
 
 function showResult() {
     resultUI.score.innerText = score;
-    resultUI.rank.innerText = getRank(score);
+    const r = getRank(score);
+    resultUI.rank.innerText = r;
+    resultUI.rank.className = 'rank-badge';
+    resultUI.rank.classList.add(`rank-${r}`);
     setScreen('result');
 }
 
