@@ -173,7 +173,7 @@ wss.on('connection', (ws) => {
 });
 
 // Heartbeat
-setInterval(() => {
+const heartbeatInterval = setInterval(() => {
     wss.clients.forEach((ws) => {
         if (ws.isAlive === false) {
             return ws.terminate();
@@ -183,7 +183,31 @@ setInterval(() => {
     });
 }, 30000);
 
+// Graceful shutdown
+let isShuttingDown = false;
 process.on('SIGINT', () => {
-    console.log('\n[ws] shutting down');
-    wss.close(() => process.exit(0));
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    
+    console.log('\n[ws] shutting down gracefully...');
+    
+    // Stop heartbeat
+    clearInterval(heartbeatInterval);
+    
+    // Close all client connections
+    wss.clients.forEach(ws => {
+        ws.close(1000, 'Server shutting down');
+    });
+    
+    // Close the server
+    wss.close(() => {
+        console.log('[ws] server closed');
+        process.exit(0);
+    });
+    
+    // Force exit after 5 seconds if graceful shutdown fails
+    setTimeout(() => {
+        console.log('[ws] forcing shutdown');
+        process.exit(1);
+    }, 5000);
 });

@@ -37,6 +37,7 @@ let waitingForOpponent = false;
 let pendingStage = null;
 const RADAR_RANGE = 500; // meters
 let stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
+const DEFAULT_SPAWN_HEIGHT = 50;
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
@@ -181,7 +182,7 @@ function startGame(stage, opts = {}) {
     
     player = createPlayer({ bodyColor: 0x607d8b, cockpitColor: 0xffd54f });
     scene.add(player.mesh);
-    player.mesh.position.set(0, 50, 0);
+    applySpawnPose(player);
 
     // Muzzle Flash Effect Setup
     muzzleFlashLight = new THREE.PointLight(0xffffaa, 0, 20); // Initially 0 intensity
@@ -636,6 +637,31 @@ function resolveMissileTarget(msg) {
         return e ? e.mesh : null;
     }
     return null;
+}
+
+function hashStringToAngle(str) {
+    if(!str) return 0;
+    let h = 0;
+    for(let i=0; i<str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    return (h % 360) * Math.PI / 180;
+}
+
+function getSpawnPose(id) {
+    if(gameMode === GAME_MODES.LOCAL) {
+        return { pos: new THREE.Vector3(0, DEFAULT_SPAWN_HEIGHT, 0), rotY: 0 };
+    }
+    const angle = hashStringToAngle(id || 'local');
+    const dist = 150;
+    const pos = new THREE.Vector3(Math.cos(angle) * dist, DEFAULT_SPAWN_HEIGHT, Math.sin(angle) * dist);
+    // Face roughly toward origin
+    const rotY = Math.atan2(-Math.sin(angle), -Math.cos(angle));
+    return { pos, rotY };
+}
+
+function applySpawnPose(p) {
+    const pose = getSpawnPose(netPlayerId || 'local');
+    p.mesh.position.copy(pose.pos);
+    p.mesh.rotation.set(0, pose.rotY, 0);
 }
 
 function removeRemotePlayer(id) {
@@ -1185,8 +1211,7 @@ function animate() {
                 armor = 100;
                 missileCount = CONFIG.missileCapacity;
                 player.speed = CONFIG.playerSpeedMin;
-                player.mesh.position.set(0, 50, 0);
-                player.mesh.rotation.set(0, 0, 0);
+                applySpawnPose(player);
                 showMessage(`RESPAWN - LIVES ${lives}`, 1000);
                 updateUI();
             } else {
