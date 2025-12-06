@@ -33,6 +33,8 @@ let lastNetStateSent = 0;
 let pendingEnemySnapshot = null;
 let lastEnemySnapshotTime = 0;
 let lives = 3;
+let waitingForOpponent = false;
+let pendingStage = null;
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
@@ -52,13 +54,15 @@ const ui = {
     markersLayer: document.getElementById('markers-layer'),
     netBadge: document.getElementById('net-badge'),
     lives: document.getElementById('lives-val'),
-    livesPanel: document.getElementById('lives-panel')
+    livesPanel: document.getElementById('lives-panel'),
+    waitingText: document.getElementById('waiting-text')
 };
 const screens = {
     title: document.getElementById('title-screen'),
     world: document.getElementById('world-screen'),
     result: document.getElementById('result-screen'),
-    online: document.getElementById('online-screen')
+    online: document.getElementById('online-screen'),
+    waiting: document.getElementById('waiting-screen')
 };
 const menuActions = {
     enterWorld: document.getElementById('enter-world-select'),
@@ -69,7 +73,9 @@ const menuActions = {
     retry: document.getElementById('retry-btn'),
     resultToWorld: document.getElementById('result-to-world'),
     resultToTitle: document.getElementById('result-to-title'),
-    onlineStart: document.getElementById('online-start')
+    onlineStart: document.getElementById('online-start'),
+    onlineRandom: document.getElementById('online-random'),
+    cancelWait: document.getElementById('cancel-wait')
 };
 const resultUI = {
     score: document.getElementById('result-score'),
@@ -138,6 +144,8 @@ function init() {
     if(menuActions.resultToWorld) menuActions.resultToWorld.addEventListener('click', () => setScreen('world'));
     if(menuActions.resultToTitle) menuActions.resultToTitle.addEventListener('click', () => setScreen('title'));
     if(menuActions.onlineStart) menuActions.onlineStart.addEventListener('click', () => handleOnlineStart());
+    if(menuActions.onlineRandom) menuActions.onlineRandom.addEventListener('click', () => handleRandomMatch());
+    if(menuActions.cancelWait) menuActions.cancelWait.addEventListener('click', () => cancelWaiting());
     document.querySelectorAll('[data-stage]').forEach(btn => {
         btn.addEventListener('click', () => startGame(btn.dataset.stage, { mode: GAME_MODES.LOCAL }));
     });
@@ -228,19 +236,37 @@ async function handleOnlineStart() {
     const stage = onlineUI.stage.value;
     try {
         setNetStatus(`CONNECTING ${room}`, 'pending');
+        showWaiting(`CONNECTING ${room}...`);
         if(!netClient) netClient = new NetClient(NET_DEFAULT_URL);
-        const info = await netClient.connect({ room, mode, stage });
-        netPlayerId = info.playerId;
-        isNetHost = info.isHost;
-        netRoom = info.room;
-        gameMode = info.mode || mode;
-        const chosenStage = info.stage || stage;
-        setNetStatus(`ROOM ${netRoom}`, 'online');
-        startGame(chosenStage, { mode: gameMode, isHost: isNetHost, roomCode: netRoom });
+        pendingStage = stage;
+        const info = await netClient.connect({ room, mode, stage, random: false });
+        handleWelcome(info);
     } catch(err) {
         console.error(err);
         setNetStatus('FAILED', 'offline');
         showMessage('CONNECT FAILED', 1200);
+        setScreen('online');
+        waitingForOpponent = false;
+    }
+}
+
+async function handleRandomMatch() {
+    if(!onlineUI.mode || !onlineUI.stage) return;
+    const mode = onlineUI.mode.value;
+    const stage = onlineUI.stage.value;
+    try {
+        setNetStatus('MATCHING...', 'pending');
+        showWaiting('MATCHING...');
+        if(!netClient) netClient = new NetClient(NET_DEFAULT_URL);
+        pendingStage = stage;
+        const info = await netClient.connect({ mode, stage, random: true });
+        handleWelcome(info);
+    } catch(err) {
+        console.error(err);
+        setNetStatus('FAILED', 'offline');
+        showMessage('MATCH FAILED', 1200);
+        setScreen('online');
+        waitingForOpponent = false;
     }
 }
 
@@ -252,6 +278,19 @@ function setNetStatus(text, state) {
         ui.netBadge.style.borderColor = state === 'online' ? 'rgba(0,255,140,0.7)' : 'rgba(255,255,255,0.3)';
         ui.netBadge.style.boxShadow = state === 'online' ? '0 0 12px rgba(0,255,140,0.5)' : '0 0 12px rgba(255,255,255,0.2)';
     }
+}
+
+function showWaiting(text) {
+    if(ui.waitingText) ui.waitingText.innerText = text;
+    setScreen('waiting');
+    waitingForOpponent = true;
+}
+
+function cancelWaiting() {
+    waitingForOpponent = false;
+    if(netClient) netClient.disconnect();
+    setNetStatus('OFFLINE', 'offline');
+    setScreen('online');
 }
 
 function sendNet(type, payload) {
@@ -268,7 +307,13 @@ class NetClient {
     isOpen() {
         return this.ws && this.ws.readyState === WebSocket.OPEN;
     }
-    connect({ room, mode, stage }) {
+    disconnect() {
+        if(this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+    }
+    connect({ room, mode, stage, random }) {
         return new Promise((resolve, reject) => {
             if(this.ws) {
                 this.ws.close();
@@ -277,7 +322,8 @@ class NetClient {
             const ws = this.ws;
             let welcomed = false;
             ws.onopen = () => {
-                ws.send(JSON.stringify({ type: 'join', room, mode, stage }));
+                if(random) ws.send(JSON.stringify({ type: 'matchmake', mode, stage }));
+                else ws.send(JSON.stringify({ type: 'join', room, mode, stage }));
             };
             ws.onmessage = (ev) => {
                 let msg;
@@ -295,6 +341,8 @@ class NetClient {
             ws.onclose = () => {
                 if(!welcomed) reject(new Error('Disconnected'));
                 setNetStatus('OFFLINE', 'offline');
+                waitingForOpponent = false;
+                if(screens.waiting && screens.waiting.classList.contains('active')) setScreen('online');
             };
         });
     }
@@ -307,13 +355,21 @@ class NetClient {
             case 'state': applyRemoteState(msg); break;
             case 'action': handleRemoteAction(msg); break;
             case 'hit': handleRemoteHit(msg); break;
-            case 'player-join': showMessage('ALLY CONNECTED', 800); break;
-            case 'player-leave': removeRemotePlayer(msg.playerId); break;
+            case 'player-join':
+                showMessage('ALLY CONNECTED', 800);
+                if(waitingForOpponent && msg.count >= 2) startMatchFromNet();
+                break;
+            case 'player-leave':
+                removeRemotePlayer(msg.playerId);
+                break;
             case 'host-grant':
                 isNetHost = true;
                 if(gameMode === GAME_MODES.ONLINE_COOP && enemies.length === 0) {
                     for(let i=0; i<10; i++) spawnEnemy();
                 }
+                break;
+            case 'matching':
+                showWaiting('MATCHING...');
                 break;
             case 'enemySnapshot': applyEnemySnapshot(msg); break;
             case 'error':
@@ -590,6 +646,26 @@ function handleRemoteHit(msg) {
 function applyEnemySnapshot(snapshot) {
     if(!snapshot || isNetHost) return;
     pendingEnemySnapshot = snapshot;
+}
+
+function handleWelcome(info) {
+    netPlayerId = info.playerId;
+    isNetHost = info.isHost;
+    netRoom = info.room;
+    gameMode = info.mode || gameMode;
+    pendingStage = info.stage || pendingStage || currentStage;
+    setNetStatus(`ROOM ${netRoom}`, 'online');
+    if(info.count >= 2) {
+        startMatchFromNet();
+    } else {
+        showWaiting(`ROOM ${netRoom} // WAITING FOR PILOT`);
+    }
+}
+
+function startMatchFromNet() {
+    waitingForOpponent = false;
+    if(!pendingStage) pendingStage = currentStage;
+    startGame(pendingStage, { mode: gameMode, isHost: isNetHost, roomCode: netRoom });
 }
 
 function syncEnemiesFromSnapshot(snapshot) {

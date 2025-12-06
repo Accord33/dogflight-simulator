@@ -113,6 +113,7 @@
                     </select>
                     <div class="menu-actions">
                         <button id="online-start" class="stage-btn"><span>DEPLOY ONLINE</span></button>
+                        <button id="online-random" class="stage-btn ghost-btn"><span>RANDOM MATCH</span></button>
                         <button class="stage-btn ghost-btn" id="online-to-title"><span>BACK</span></button>
                     </div>
                     <div id="online-hint">Server: ws://localhost:3001 (edit in script.js if needed)</div>
@@ -125,6 +126,14 @@
                         <div id="net-room-text" class="hud-label" style="margin-top:10px;">ROOM --</div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div id="waiting-screen" class="menu-section">
+            <div class="waiting-container">
+                <div class="spinner"></div>
+                <div id="waiting-text">MATCHING...</div>
+                <button id="cancel-wait" class="stage-btn ghost-btn" style="max-width:320px;"><span>CANCEL</span></button>
             </div>
         </div>
 
