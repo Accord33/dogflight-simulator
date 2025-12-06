@@ -118,6 +118,35 @@ function createToneBuffer(ctx, {
     return buffer;
 }
 
+function createShapedNoiseBuffer(ctx, {
+    duration = 0.2,
+    attack = 0.01,
+    release = 0.05,
+    volume = 0.8,
+    lowpass = 4000,
+    highpass = 120,
+    drive = 1.2
+} = {}) {
+    const sr = ctx.sampleRate;
+    const len = Math.max(1, Math.floor(sr * duration));
+    const buffer = ctx.createBuffer(1, len, sr);
+    const data = buffer.getChannelData(0);
+    const lpCoeff = Math.exp(-2 * Math.PI * lowpass / sr);
+    const hpCoeff = Math.exp(-2 * Math.PI * highpass / sr);
+    let lpState = 0;
+    let hpState = 0;
+    for(let i = 0; i < len; i++) {
+        const env = Math.min(1, i / Math.max(1, sr * attack)) * Math.min(1, (len - i) / Math.max(1, sr * release));
+        const white = Math.random() * 2 - 1;
+        hpState += (white - hpState) * (1 - hpCoeff);
+        const highPassed = white - hpState;
+        lpState += (highPassed - lpState) * (1 - lpCoeff);
+        const shaped = Math.tanh(lpState * drive) / Math.tanh(drive);
+        data[i] = shaped * env * volume;
+    }
+    return buffer;
+}
+
 function concatBuffers(ctx, parts) {
     const totalLength = parts.reduce((sum, buf) => sum + buf.length, 0);
     const buffer = ctx.createBuffer(1, totalLength, ctx.sampleRate);
@@ -130,6 +159,17 @@ function concatBuffers(ctx, parts) {
     return buffer;
 }
 
+function mixBuffers(ctx, parts) {
+    const length = Math.max(...parts.map((buf) => buf.length));
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const out = buffer.getChannelData(0);
+    for(const part of parts) {
+        const data = part.getChannelData(0);
+        for(let i = 0; i < part.length; i++) out[i] += data[i];
+    }
+    return buffer;
+}
+
 const SOUND_MANIFEST = {
     uiClick: (ctx) => createToneBuffer(ctx, { frequency: 1300, duration: 0.07, type: 'square', attack: 0.005, release: 0.06, volume: 0.35 }),
     uiHover: (ctx) => createToneBuffer(ctx, { frequency: 650, duration: 0.12, type: 'triangle', attack: 0.01, release: 0.08, volume: 0.3 }),
@@ -137,17 +177,27 @@ const SOUND_MANIFEST = {
         createToneBuffer(ctx, { frequency: 440, endFrequency: 660, duration: 0.18, type: 'sawtooth', attack: 0.01, release: 0.07, volume: 0.35 }),
         createToneBuffer(ctx, { frequency: 990, duration: 0.15, type: 'triangle', attack: 0.005, release: 0.08, volume: 0.25 })
     ]),
-    bullet: (ctx) => createToneBuffer(ctx, { frequency: 2100, endFrequency: 1600, duration: 0.08, type: 'sawtooth', attack: 0.002, release: 0.05, volume: 0.35 }),
-    missile: (ctx) => concatBuffers(ctx, [
-        createToneBuffer(ctx, { frequency: 480, endFrequency: 220, duration: 0.2, type: 'sawtooth', attack: 0.01, release: 0.08, volume: 0.4 }),
-        createToneBuffer(ctx, { frequency: 160, duration: 0.25, type: 'triangle', attack: 0.02, release: 0.12, volume: 0.35 })
+    bullet: (ctx) => mixBuffers(ctx, [
+        createShapedNoiseBuffer(ctx, { duration: 0.07, attack: 0.0006, release: 0.045, volume: 0.6, highpass: 900, lowpass: 5200, drive: 1.8 }), // muzzle blast
+        createToneBuffer(ctx, { frequency: 4200, endFrequency: 1200, duration: 0.04, type: 'sawtooth', attack: 0.0008, release: 0.022, volume: 0.22 }), // supersonic crack
+        createToneBuffer(ctx, { frequency: 140, endFrequency: 95, duration: 0.09, type: 'triangle', attack: 0.002, release: 0.07, volume: 0.3 }) // low-body thump
     ]),
-    lock: (ctx) => createToneBuffer(ctx, { frequency: 1200, duration: 0.12, type: 'square', attack: 0.005, release: 0.08, volume: 0.35 }),
-    hit: (ctx) => createToneBuffer(ctx, { frequency: 320, duration: 0.18, type: 'triangle', attack: 0.003, release: 0.12, volume: 0.5, noise: true }),
+    missile: (ctx) => mixBuffers(ctx, [
+        createShapedNoiseBuffer(ctx, { duration: 0.65, attack: 0.02, release: 0.16, volume: 0.55, highpass: 80, lowpass: 1800, drive: 1.6 }), // exhaust roar
+        createToneBuffer(ctx, { frequency: 520, endFrequency: 340, duration: 0.5, type: 'triangle', attack: 0.01, release: 0.1, volume: 0.22 }), // turbine whine
+        createToneBuffer(ctx, { frequency: 180, endFrequency: 130, duration: 0.65, type: 'sawtooth', attack: 0.015, release: 0.14, volume: 0.25 }) // low rumble
+    ]),
+    lock: (ctx) => createToneBuffer(ctx, { frequency: 840, duration: 0.14, type: 'square', attack: 0.004, release: 0.08, volume: 0.32 }),
+    hit: (ctx) => mixBuffers(ctx, [
+        createShapedNoiseBuffer(ctx, { duration: 0.14, attack: 0.0015, release: 0.11, volume: 0.6, highpass: 180, lowpass: 2600, drive: 1.5 }),
+        createToneBuffer(ctx, { frequency: 420, endFrequency: 210, duration: 0.1, type: 'triangle', attack: 0.004, release: 0.08, volume: 0.24 }),
+        createToneBuffer(ctx, { frequency: 1600, endFrequency: 900, duration: 0.05, type: 'square', attack: 0.001, release: 0.04, volume: 0.14 })
+    ]),
     alert: (ctx) => createToneBuffer(ctx, { frequency: 760, duration: 0.35, type: 'square', attack: 0.01, release: 0.2, volume: 0.25 }),
-    explosion: (ctx) => concatBuffers(ctx, [
-        createToneBuffer(ctx, { frequency: 90, duration: 0.35, type: 'triangle', attack: 0.01, release: 0.25, volume: 0.4, noise: true }),
-        createToneBuffer(ctx, { frequency: 40, duration: 0.25, type: 'sawtooth', attack: 0.01, release: 0.2, volume: 0.35 })
+    explosion: (ctx) => mixBuffers(ctx, [
+        createShapedNoiseBuffer(ctx, { duration: 0.55, attack: 0.006, release: 0.32, volume: 0.62, highpass: 70, lowpass: 2400, drive: 1.8 }),
+        createToneBuffer(ctx, { frequency: 110, endFrequency: 55, duration: 0.42, type: 'sawtooth', attack: 0.01, release: 0.24, volume: 0.3 }),
+        createToneBuffer(ctx, { frequency: 240, endFrequency: 120, duration: 0.26, type: 'triangle', attack: 0.006, release: 0.14, volume: 0.22 })
     ]),
     result: (ctx) => concatBuffers(ctx, [
         createToneBuffer(ctx, { frequency: 740, duration: 0.18, type: 'triangle', attack: 0.01, release: 0.08, volume: 0.35 }),
@@ -337,7 +387,7 @@ function fireBullet(source, isEnemy) {
     const now = Date.now();
     if(!isEnemy) {
         // Rate limit check handled in animate loop for player
-        sounds.play('bullet', { volume: 0.35 });
+        sounds.play('bullet', { volume: 0.5, playbackRate: 0.9 + Math.random() * 0.16 });
     } else {
         if (now - (source.lastShot||0) < 1000) return; // Enemy rate limit
         source.lastShot = now;
