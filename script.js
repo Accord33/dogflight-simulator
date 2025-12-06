@@ -6,6 +6,12 @@ const CONFIG = {
     missileCapacity: 20,
     missileReloadTimeMs: 30000, // 30s reload when missiles are depleted
     enemySpeed: 0.5,
+    enemyApproachSpeed: 0.8,
+    enemyStrafeSpeed: 0.65,
+    enemyEvadeSpeed: 0.9,
+    enemyTurnLerp: 0.15,
+    enemyApproachDistance: 900,
+    enemyEvadeDistance: 250,
     seaSize: 2000,
     fireRate: 80 // ms between shots
 };
@@ -42,6 +48,7 @@ let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
 const scoreListKey = 'aceWingHighScores';
+let lastFrameTime = Date.now();
 
 // UI Refs
 const ui = {
@@ -589,7 +596,15 @@ function createEnemy() {
     wingGeo.translate(0, 0, 0.5);
     const wings = new THREE.Mesh(wingGeo, bodyMat);
     group.add(wings);
-    return { mesh: group, speed: CONFIG.enemySpeed, lastShot: 0 };
+    return {
+        mesh: group,
+        speed: CONFIG.enemySpeed,
+        lastShot: 0,
+        velocity: new THREE.Vector3(),
+        state: 'approach',
+        stateTimer: 0,
+        strafeDir: Math.random() < 0.5 ? -1 : 1
+    };
 }
 
 function ensureRemotePlayer(id) {
@@ -968,6 +983,10 @@ function animate() {
     if(!isPlaying) { renderer.render(scene, camera); return; }
     requestAnimationFrame(animate);
 
+    const nowFrame = Date.now();
+    const dt = Math.min(0.05, (nowFrame - lastFrameTime) / 1000);
+    lastFrameTime = nowFrame;
+
     if(pendingEnemySnapshot && gameMode === GAME_MODES.ONLINE_COOP && !isNetHost) {
         syncEnemiesFromSnapshot(pendingEnemySnapshot);
     }
@@ -1116,7 +1135,7 @@ function animate() {
         }
     });
 
-    // Enemies (RELAXED ATTACK LOGIC)
+    // Enemies (state-based steering)
     const runEnemies = (gameMode === GAME_MODES.LOCAL) || (gameMode === GAME_MODES.ONLINE_COOP && isNetHost);
     let alert = false;
     for(let i=enemies.length-1; i>=0; i--) {
@@ -1129,14 +1148,48 @@ function animate() {
                 if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); spawnEnemy(); continue;
             }
 
-            toP.y = 0; toP.normalize();
-            e.mesh.position.y = 50; e.mesh.rotation.x = 0; e.mesh.rotation.z = 0;
-            e.mesh.quaternion.slerp(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.atan2(toP.x, toP.z)+Math.PI), 0.03);
-            e.mesh.translateZ(e.speed);
+            e.stateTimer = (e.stateTimer || 0) + dt;
+            const prevState = e.state || 'approach';
+            if(dist > CONFIG.enemyApproachDistance) e.state = 'approach';
+            else if(dist < CONFIG.enemyEvadeDistance) e.state = 'evade';
+            else e.state = 'strafe';
+            if(e.state !== prevState) {
+                e.stateTimer = 0;
+                e.strafeDir = Math.random() < 0.5 ? -1 : 1;
+            }
+
+            const flatDir = toP.clone(); flatDir.y = 0;
+            const baseDir = flatDir.lengthSq() > 0.0001 ? flatDir.normalize() : new THREE.Vector3(0,0,1);
+            const up = new THREE.Vector3(0,1,0);
+            let desiredDir = baseDir.clone();
+            let desiredSpeed = CONFIG.enemySpeed;
+
+            if(e.state === 'approach') {
+                desiredSpeed = CONFIG.enemyApproachSpeed;
+            } else if(e.state === 'strafe') {
+                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(0.7 * (e.strafeDir || 1));
+                desiredDir.add(side).normalize();
+                desiredSpeed = CONFIG.enemyStrafeSpeed;
+                if(e.stateTimer > 2.5) { e.strafeDir *= -1; e.stateTimer = 0; }
+            } else {
+                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(1.0 * (e.strafeDir || 1));
+                desiredDir = baseDir.clone().multiplyScalar(0.3).add(side).normalize();
+                desiredSpeed = CONFIG.enemyEvadeSpeed;
+                if(e.stateTimer > 1.5 && dist > CONFIG.enemyEvadeDistance * 1.5) e.state = 'approach';
+            }
+
+            e.velocity = e.velocity || new THREE.Vector3();
+            const targetVel = desiredDir.multiplyScalar(desiredSpeed);
+            e.velocity.lerp(targetVel, 0.1);
+            e.mesh.position.add(e.velocity.clone());
+            e.mesh.position.y = 50;
+
+            const moveDir = e.velocity.lengthSq() > 0.0001 ? e.velocity.clone().normalize() : desiredDir;
+            const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), moveDir);
+            e.mesh.quaternion.slerp(targetQuat, CONFIG.enemyTurnLerp);
 
             if(dist < 800) {
-                 const now = Date.now();
-                 if(now - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = now; }
+                 if(nowFrame - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = nowFrame; }
                  if(Math.random() < 0.005 && dist > 100) fireMissile(e, true);
             }
         }
