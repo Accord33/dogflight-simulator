@@ -613,6 +613,31 @@ function createOpponentMarker() {
     return marker;
 }
 
+function selectPvpTarget(source) {
+    let best = null;
+    let bestAngle = 0.6;
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(source.mesh.quaternion);
+    Object.values(remotePlayers).forEach(rp => {
+        const to = new THREE.Vector3().subVectors(rp.mesh.position, source.mesh.position).normalize();
+        const a = forward.angleTo(to);
+        if(a < bestAngle) { best = rp; bestAngle = a; }
+    });
+    return best;
+}
+
+function resolveMissileTarget(msg) {
+    if(!msg.targetType) return null;
+    if(msg.targetType === 'player') {
+        if(msg.targetId === netPlayerId) return player.mesh;
+        if(remotePlayers[msg.targetId]) return remotePlayers[msg.targetId].mesh;
+    }
+    if(msg.targetType === 'enemy' && msg.targetId !== undefined) {
+        const e = enemies.find(en => en.id === msg.targetId);
+        return e ? e.mesh : null;
+    }
+    return null;
+}
+
 function removeRemotePlayer(id) {
     const rp = remotePlayers[id];
     if(!rp) return;
@@ -624,13 +649,19 @@ function removeRemotePlayer(id) {
 function applyRemoteState(msg) {
     if(!msg.playerId || msg.playerId === netPlayerId) return;
     const rp = ensureRemotePlayer(msg.playerId);
+    const prevLives = rp.lives;
     if(msg.pos) rp.mesh.position.set(msg.pos.x, msg.pos.y, msg.pos.z);
     if(msg.rot) rp.mesh.quaternion.set(msg.rot.x, msg.rot.y, msg.rot.z, msg.rot.w);
     rp.speed = msg.speed || CONFIG.playerSpeedMin;
     if(rp.flame) rp.flame.scale.z = rp.speed * 2;
     if(typeof msg.armor === 'number') rp.armor = msg.armor;
     if(typeof msg.score === 'number') rp.score = msg.score;
-    if(typeof msg.lives === 'number') rp.lives = msg.lives;
+    if(typeof msg.lives === 'number') {
+        rp.lives = msg.lives;
+        if(gameMode === GAME_MODES.ONLINE_VS && typeof prevLives === 'number' && prevLives > rp.lives) {
+            stats.kills += (prevLives - rp.lives);
+        }
+    }
 }
 
 function handleRemoteAction(msg) {
@@ -644,14 +675,14 @@ function handleRemoteAction(msg) {
     }
     if(msg.action === 'fireMissile') {
         const asEnemy = gameMode === GAME_MODES.ONLINE_VS;
-        fireMissile(rp, asEnemy, { fromRemote: true, ownerId: msg.playerId, position: spawnPos, quaternion: quat });
+        const target = resolveMissileTarget(msg);
+        fireMissile(rp, asEnemy, { fromRemote: true, ownerId: msg.playerId, position: spawnPos, quaternion: quat, targetType: msg.targetType, targetId: msg.targetId, resolvedTarget: target });
     }
     if(msg.action === 'gameOver') {
         const loserId = msg.loserId || msg.playerId;
         if(loserId === netPlayerId) {
             if(isPlaying) gameOver('LOSE');
         } else {
-            stats.kills += 1;
             if(isPlaying) gameOver('WIN');
         }
     }
@@ -756,16 +787,32 @@ function fireMissile(source, isEnemy, opts = {}) {
         if(missileCount === 0) startMissileReload();
         updateUI();
     }
-    let target = isEnemy ? player : null;
-    if(!isEnemy) {
-        let minAngle = 0.5;
-        const pDir = new THREE.Vector3(0,0,-1).applyQuaternion(source.mesh.quaternion);
-        enemies.forEach(e => {
-            const toE = new THREE.Vector3().subVectors(e.mesh.position, source.mesh.position).normalize();
-            const a = pDir.angleTo(toE);
-            if(a < minAngle) { target = e; minAngle = a; }
-        });
-        if(target && !opts.fromRemote) showMessage("FOX 2", 800);
+    let target = opts.resolvedTarget || null;
+    let targetType = opts.targetType || null;
+    let targetId = opts.targetId || null;
+    if(!target) {
+        if(isEnemy) {
+            target = player.mesh;
+            targetType = 'player';
+            targetId = netPlayerId || 'local';
+        } else if(gameMode === GAME_MODES.ONLINE_VS) {
+            const chosen = selectPvpTarget(source);
+            if(chosen) {
+                target = chosen.mesh;
+                targetType = 'player';
+                targetId = chosen.id || null;
+            }
+            if(target && !opts.fromRemote) showMessage("FOX 2", 800);
+        } else {
+            let minAngle = 0.5;
+            const pDir = new THREE.Vector3(0,0,-1).applyQuaternion(source.mesh.quaternion);
+            enemies.forEach(e => {
+                const toE = new THREE.Vector3().subVectors(e.mesh.position, source.mesh.position).normalize();
+                const a = pDir.angleTo(toE);
+                if(a < minAngle) { target = e.mesh || e; minAngle = a; targetType = 'enemy'; targetId = e.id; }
+            });
+            if(target && !opts.fromRemote) showMessage("FOX 2", 800);
+        }
     }
     const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
@@ -800,14 +847,16 @@ function fireMissile(source, isEnemy, opts = {}) {
     m.quaternion.copy(spawnQuat);
     scene.add(m);
     const missileSpeed = (source.speed || player.speed) * CONFIG.missileSpeedMultiplier;
-    missiles.push({ mesh: m, target: target, life: 300, speed: missileSpeed, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
+    missiles.push({ mesh: m, target: target, targetType, targetId, life: 300, speed: missileSpeed, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
 
     if(gameMode !== GAME_MODES.LOCAL && !opts.fromRemote) {
         sendNet('action', {
             action: 'fireMissile',
             isEnemy: isEnemy,
             position: { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z },
-            quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w }
+            quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w },
+            targetType,
+            targetId
         });
     }
 }
@@ -962,8 +1011,16 @@ function animate() {
             const p = arr[i];
             p.mesh.translateZ(-((p.speed)||CONFIG.bulletSpeed));
             p.life--;
-            if(p.target && p.target.mesh) {
-                 const toT = new THREE.Vector3().subVectors(p.target.mesh.position, p.mesh.position).normalize();
+            if(arr === missiles) {
+                // Re-resolve target if missing
+                if((!p.target || !p.target.position) && (p.targetType || p.targetId !== undefined)) {
+                    const resolved = resolveMissileTarget({ targetType: p.targetType, targetId: p.targetId });
+                    if(resolved) p.target = resolved;
+                }
+            }
+            const targetMesh = p.target ? (p.target.mesh || p.target) : null;
+            if(targetMesh) {
+                 const toT = new THREE.Vector3().subVectors(targetMesh.position, p.mesh.position).normalize();
                  const f = new THREE.Vector3(0,0,-1).applyQuaternion(p.mesh.quaternion);
                  if(f.angleTo(toT) < Math.PI/3) p.mesh.quaternion.slerp(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), toT), 0.04);
             }
@@ -1122,6 +1179,7 @@ function animate() {
 
     if(armor <= 0) {
         if(gameMode === GAME_MODES.ONLINE_VS) {
+            stats.deaths += 1;
             if(lives > 1) {
                 lives--;
                 armor = 100;
@@ -1132,7 +1190,6 @@ function animate() {
                 showMessage(`RESPAWN - LIVES ${lives}`, 1000);
                 updateUI();
             } else {
-                stats.deaths += 1;
                 sendNet('action', { action: 'gameOver', loserId: netPlayerId });
                 gameOver('LOSE');
             }
