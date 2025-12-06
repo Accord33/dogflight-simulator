@@ -3,6 +3,8 @@ const CONFIG = {
     turnSpeed: 0.015,
     bulletSpeed: 6.0, 
     missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
+    missileCapacity: 20,
+    missileReloadTimeMs: 30000, // 30s reload when missiles are depleted
     enemySpeed: 0.5,
     seaSize: 2000,
     fireRate: 80 // ms between shots
@@ -17,8 +19,8 @@ let mouse = { x: 0, y: 0, isDown: false };
 
 let isPlaying = false;
 let currentStage = 'OCEAN';
-let score = 0, armor = 100, missileCount = 20;
-let lastShotTime = 0, lastMissileTime = 0;
+let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
+let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
 const scoreListKey = 'aceWingHighScores';
 
@@ -115,7 +117,7 @@ function init() {
 function startGame(stage) {
     currentStage = stage;
     isPlaying = true;
-    score = 0; armor = 100; missileCount = 20;
+    score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
     bullets = []; missiles = []; enemies = []; particles = []; obstacles = [];
@@ -378,6 +380,11 @@ function spawnEnemy() {
     e.marker = marker;
 }
 
+function startMissileReload() {
+    if(missileReloadEndTime || !isPlaying) return;
+    missileReloadEndTime = Date.now() + CONFIG.missileReloadTimeMs;
+}
+
 function fireMissile(source, isEnemy) {
     if(!isEnemy) {
         if(missileCount <= 0 || !isPlaying) return;
@@ -385,6 +392,7 @@ function fireMissile(source, isEnemy) {
         if(now - lastMissileTime < 1000) return;
         lastMissileTime = now;
         missileCount--;
+        if(missileCount === 0) startMissileReload();
         updateUI();
     }
     let target = isEnemy ? player : null;
@@ -456,7 +464,14 @@ function updateUI() {
     ui.hpBar.style.width = hp + '%';
     ui.hpBar.style.background = hp>30 ? '#fff' : '#ff3333';
     ui.hpBar.style.boxShadow = hp>30 ? '0 0 15px #fff' : '0 0 15px red';
-    ui.missile.innerText = missileCount;
+    if(missileReloadEndTime) {
+        const remaining = Math.max(0, Math.ceil((missileReloadEndTime - Date.now()) / 1000));
+        ui.missile.innerText = `RELOAD ${remaining}s`;
+        ui.missile.classList.add('reloading');
+    } else {
+        ui.missile.innerText = missileCount;
+        ui.missile.classList.remove('reloading');
+    }
 }
 function saveScore(s) {
     let sc = JSON.parse(localStorage.getItem(scoreListKey)||'[]'); sc.push(s);
@@ -530,6 +545,12 @@ function animate() {
             for(let i=0; i<pos.count; i+=3) pos.setY(i, Math.sin(t+i)*2);
             pos.needsUpdate = true;
         }
+    }
+
+    if(missileReloadEndTime && Date.now() >= missileReloadEndTime) {
+        missileCount = CONFIG.missileCapacity;
+        missileReloadEndTime = null;
+        showMessage("MISSILES READY", 1000);
     }
 
     // Bullets/Missiles
