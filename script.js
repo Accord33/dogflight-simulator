@@ -28,11 +28,13 @@ let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
 let keys = { w: false, s: false, a: false, d: false, q: false, e: false, space: false };
 let mouse = { x: 0, y: 0, isDown: false };
+const SPAWN_SAFE_RADIUS = 280;
 
 let isPlaying = false;
 let currentStage = 'OCEAN';
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
+let spawnShieldEndTime = 0;
 let lockState = { target: null, progress: 0 };
 let muzzleFlashLight;
 let cameraVelocity = new THREE.Vector3();
@@ -138,6 +140,7 @@ function startGame(stage) {
     isPlaying = true;
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
     lockState = { target: null, progress: 0 };
+    spawnShieldEndTime = Date.now() + 2500;
     cameraVelocity.set(0,0,0);
     lastFrameTime = performance.now();
     
@@ -194,6 +197,20 @@ function showResult() {
     resultUI.rank.className = 'rank-badge';
     resultUI.rank.classList.add(`rank-${r}`);
     setScreen('result');
+}
+
+function pushOutsideSafeZone(vec, padding=180) {
+    const r = Math.hypot(vec.x, vec.z);
+    if(r < SPAWN_SAFE_RADIUS) {
+        const angle = Math.atan2(vec.z, vec.x) || (Math.random() * Math.PI * 2);
+        const newR = SPAWN_SAFE_RADIUS + padding + Math.random() * 220;
+        vec.x = Math.cos(angle) * newR;
+        vec.z = Math.sin(angle) * newR;
+    }
+}
+
+function isSpawnShieldActive() {
+    return isPlaying && Date.now() < spawnShieldEndTime;
 }
 
 // --- Mechanics ---
@@ -333,7 +350,9 @@ function createBuildings() {
     for(let i=0; i<80; i++) {
         const h = 20 + Math.random() * 80;
         const building = new THREE.Mesh(geo, mat);
-        building.position.set((Math.random()-0.5)*1200, h/2 - 2, (Math.random()-0.5)*1200);
+        const pos = new THREE.Vector3((Math.random()-0.5)*1200, h/2 - 2, (Math.random()-0.5)*1200);
+        pushOutsideSafeZone(pos, 260);
+        building.position.copy(pos);
         building.scale.set(10+Math.random()*20, h, 10+Math.random()*20);
         scene.add(building);
         obstacles.push(building);
@@ -345,7 +364,9 @@ function createRocks() {
     for(let i=0; i<60; i++) {
         const s = 10 + Math.random() * 40;
         const rock = new THREE.Mesh(geo, mat);
-        rock.position.set((Math.random()-0.5)*1200, -10+Math.random()*10, (Math.random()-0.5)*1200);
+        const pos = new THREE.Vector3((Math.random()-0.5)*1200, -10+Math.random()*10, (Math.random()-0.5)*1200);
+        pushOutsideSafeZone(pos, 220);
+        rock.position.copy(pos);
         rock.scale.set(s, s*1.5, s);
         rock.rotation.set(Math.random(), Math.random(), Math.random());
         scene.add(rock);
@@ -354,22 +375,25 @@ function createRocks() {
 }
 
 function createCarrierGroup() {
-    const carrier = new THREE.Group();
+    const basePos = new THREE.Vector3(-220, -4, 260);
+    pushOutsideSafeZone(basePos, 320);
+
     const deck = new THREE.Mesh(new THREE.BoxGeometry(80, 8, 260), new THREE.MeshStandardMaterial({ color: 0x1c1f26, metalness: 0.2, roughness: 0.7 }));
-    deck.position.y = -6;
-    carrier.add(deck);
+    deck.position.copy(basePos).add(new THREE.Vector3(0, -2, 0));
+    scene.add(deck); obstacles.push(deck);
+
     const island = new THREE.Mesh(new THREE.BoxGeometry(18, 30, 24), new THREE.MeshStandardMaterial({ color: 0x222a33, emissive: 0x112233, metalness: 0.3 }));
-    island.position.set(-18, 10, 30);
-    carrier.add(island);
+    island.position.copy(basePos).add(new THREE.Vector3(-18, 10, 30));
     const towerLight = new THREE.PointLight(0x66aaff, 2, 120);
-    towerLight.position.set(-18, 22, 30); carrier.add(towerLight);
-    carrier.position.set(-150, -4, 200);
-    scene.add(carrier);
-    obstacles.push(deck); obstacles.push(island);
+    towerLight.position.set(-18, 22, 30);
+    island.add(towerLight);
+    scene.add(island); obstacles.push(island);
 
     for(let i=0; i<3; i++) {
+        const escortPos = basePos.clone().add(new THREE.Vector3(-100 + i*70, -2, -80 + i*50));
+        pushOutsideSafeZone(escortPos, 280);
         const escort = new THREE.Mesh(new THREE.BoxGeometry(24, 6, 80), new THREE.MeshStandardMaterial({ color: 0x223344, metalness: 0.2, roughness: 0.6 }));
-        escort.position.set(-250 + i*80, -6, 140 + i*40);
+        escort.position.copy(escortPos);
         scene.add(escort); obstacles.push(escort);
     }
 }
@@ -389,7 +413,9 @@ function createNeonSkyTraffic() {
 function createWrecks() {
     for(let i=0; i<10; i++) {
         const hull = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 22), new THREE.MeshStandardMaterial({ color: 0x4b2f24, roughness: 1, metalness: 0.05 }));
-        hull.position.set((Math.random()-0.5)*1000, -8 + Math.random()*4, (Math.random()-0.5)*1000);
+        const pos = new THREE.Vector3((Math.random()-0.5)*1000, -8 + Math.random()*4, (Math.random()-0.5)*1000);
+        pushOutsideSafeZone(pos, 240);
+        hull.position.copy(pos);
         hull.rotation.set(Math.random()*0.2, Math.random()*Math.PI, Math.random()*0.2);
         scene.add(hull); obstacles.push(hull);
     }
@@ -420,8 +446,10 @@ function createPlayer() {
     const flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color:0x00ffff, transparent:true, opacity:0.8}));
     flame.rotateX(-Math.PI/2); flame.position.z = 4; group.add(flame);
     const wingLightGeo = new THREE.SphereGeometry(0.12, 6, 6);
-    const wingLightL = new THREE.Mesh(wingLightGeo, new THREE.MeshBasicMaterial({ color: 0x00aaff, emissive: 0x00aaff }));
-    const wingLightR = wingLightL.clone(); wingLightR.material = new THREE.MeshBasicMaterial({ color: 0xff2255, emissive: 0xff2255 });
+    const wingLightMatL = new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x00aaff, emissiveIntensity: 1.2, roughness: 0.6 });
+    const wingLightMatR = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 1.2, roughness: 0.6 });
+    const wingLightL = new THREE.Mesh(wingLightGeo, wingLightMatL);
+    const wingLightR = new THREE.Mesh(wingLightGeo, wingLightMatR);
     wingLightL.position.set(-2.2, 0.2, 0.6); wingLightR.position.set(2.2, 0.2, 0.6);
     group.add(wingLightL); group.add(wingLightR);
 
@@ -466,8 +494,9 @@ function createEnemy() {
 function spawnEnemy() {
     const e = createEnemy();
     const angle = Math.random() * Math.PI * 2;
-    const dist = 150 + Math.random() * 200;
+    const dist = 320 + Math.random() * 280;
     e.mesh.position.set(player.mesh.position.x + Math.cos(angle)*dist, 50, player.mesh.position.z + Math.sin(angle)*dist);
+    e.lastShot = Date.now() + 1400 + Math.random()*1000; // Delay first volley
     scene.add(e.mesh);
     enemies.push(e);
     
@@ -725,8 +754,10 @@ function animate() {
         if(!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
         const r = o.geometry.boundingSphere.radius * Math.max(o.scale.x||1, o.scale.y||1, o.scale.z||1);
         if(player.mesh.position.distanceTo(o.position) < r * 0.8) {
-            armor -= 25 * dt * 60;
-            showMessage("PULL UP", 400);
+            if(!isSpawnShieldActive()) {
+                armor -= 25 * dt * 60;
+                showMessage("PULL UP", 400);
+            }
         }
     }
 
@@ -776,7 +807,11 @@ function animate() {
             
             let hit = false;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < 2.5) { hit = true; armor -= 10; createExplosion(p.mesh.position, 1); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < 2.5) { 
+                    hit = true; 
+                    if(!isSpawnShieldActive()) armor -= 10; 
+                    createExplosion(p.mesh.position, 1); 
+                }
             } else {
                 for(let j=enemies.length-1; j>=0; j--) {
                     if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
