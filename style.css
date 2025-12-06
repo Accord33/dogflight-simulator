@@ -1,0 +1,136 @@
+body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Orbitron', sans-serif; cursor: crosshair; }
+#canvas-container { width: 100vw; height: 100vh; }
+
+/* --- TACTICAL UI THEME (Trailblazer Style) --- */
+:root {
+    --primary-color: #ffffff;
+    --secondary-color: #aaddff;
+    --alert-color: #ff3333;
+    --bg-glass: rgba(0, 10, 20, 0.4);
+    --text-glow: 0 0 10px rgba(255, 255, 255, 0.8);
+}
+
+/* HUD Structure */
+#hud {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;
+    padding: 30px; box-sizing: border-box; z-index: 5; color: var(--primary-color);
+}
+
+.hud-panel {
+    /* Minimalist background, focus on text */
+    text-shadow: var(--text-glow);
+}
+
+.hud-label {
+    font-size: 0.9rem; letter-spacing: 3px; color: var(--secondary-color);
+    text-transform: uppercase; display: block; margin-bottom: 5px;
+    font-weight: 700; transform: skewX(-15deg);
+}
+.hud-value {
+    font-size: 2rem; color: #fff; font-weight: 900;
+    text-shadow: 0 0 15px rgba(255,255,255,0.8);
+    letter-spacing: 2px;
+}
+
+/* Top Right: Score */
+#hud-top-right {
+    position: absolute; top: 30px; right: 50px; text-align: right;
+}
+#score-val { font-size: 4rem; letter-spacing: 5px; }
+
+/* Bottom Left: Radar */
+#hud-bottom-left {
+    position: absolute; bottom: 30px; left: 30px;
+}
+
+/* Bottom Right: Missiles & HP */
+#hud-bottom-right {
+    position: absolute; bottom: 30px; right: 100px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 20px;
+}
+
+/* HP Bar - Futuristic Strip */
+.hp-container { width: 300px; text-align: right; }
+.hp-bar-frame {
+    width: 100%; height: 12px; background: rgba(255,255,255,0.1);
+    margin-top: 5px; position: relative; transform: skewX(-30deg);
+    border: 1px solid rgba(255,255,255,0.3);
+}
+#hp-bar-fill {
+    width: 100%; height: 100%;
+    background: #fff;
+    box-shadow: 0 0 15px #fff;
+    transition: width 0.2s;
+}
+
+/* Missile Display */
+.missile-display { display: flex; align-items: baseline; gap: 15px; }
+#missile-val { font-size: 2.5rem; }
+
+/* Radar */
+#radar-container {
+    position: relative; width: 160px; height: 160px;
+    border: 2px solid rgba(255,255,255,0.3); border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,20,40,0.8) 0%, rgba(0,0,0,0.5) 100%);
+    box-shadow: 0 0 20px rgba(255,255,255,0.1); overflow: hidden;
+}
+#radar-container::before, #radar-container::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.1);
+}
+#radar-container::before { top: 50%; left: 0; width: 100%; height: 1px; }
+#radar-container::after { left: 50%; top: 0; width: 1px; height: 100%; }
+.radar-dot { position: absolute; width: 6px; height: 6px; background: #ff3333; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 8px red; }
+.radar-player { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; background: #fff; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 10px #fff; }
+
+/* Alerts */
+#missile-alert {
+    position: absolute; top: 20%; left: 50%; transform: translateX(-50%);
+    color: #ff3333; font-size: 3rem; font-weight: 900; letter-spacing: 10px;
+    text-shadow: 0 0 20px red; display: none; animation: blink 0.1s infinite alternate;
+}
+#message-area {
+    position: absolute; top: 30%; width: 100%; text-align: center;
+    color: #fff; font-size: 1.5rem; letter-spacing: 5px;
+    text-shadow: 0 0 10px #fff; opacity: 0; transition: opacity 0.5s;
+}
+
+/* Markers */
+#markers-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; z-index: 3; }
+.enemy-marker {
+    position: absolute; width: 50px; height: 50px;
+    border: 1px solid rgba(255,255,255,0.6);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 10px rgba(255,255,255,0.2);
+}
+.marker-dist {
+    position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%);
+    font-size: 0.8rem; color: #fff; text-shadow: 0 0 5px #fff;
+}
+
+/* Crosshair */
+#crosshair-wrapper { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 4; }
+#crosshair { width: 40px; height: 40px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; }
+#crosshair-dot { position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: #fff; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 5px #fff; }
+
+/* Menu */
+#menu-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(10, 15, 20, 0.9); display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 10; cursor: default; color: #fff;
+}
+.menu-container {
+    width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 50px; padding: 50px;
+    border-top: 2px solid #fff; border-bottom: 2px solid #fff;
+    background: linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(255,255,255,0.05) 50%, rgba(0,0,0,0) 100%);
+}
+h1 { grid-column: 1 / -1; text-align: center; font-size: 5rem; margin: 0 0 30px 0; letter-spacing: 15px; text-shadow: 0 0 30px #fff; }
+.stage-btn {
+    display: block; width: 100%; padding: 20px; margin-bottom: 15px;
+    background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+    text-align: left; cursor: pointer; transition: all 0.2s; font-family: 'Orbitron', sans-serif; font-size: 1.2rem;
+    transform: skewX(-20deg);
+}
+.stage-btn:hover { background: #fff; color: #000; box-shadow: 0 0 20px #fff; }
+.stage-btn span { display: inline-block; transform: skewX(20deg); } /* Counter-skew text */
+
+@keyframes blink { from { opacity: 1; } to { opacity: 0.3; } }
