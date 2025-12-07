@@ -1137,12 +1137,12 @@ function fireMissile(source, isEnemy, opts = {}) {
     }
     const geo = new THREE.CylinderGeometry(0.12, 0.16, 1.4, 10);
     geo.rotateX(Math.PI/2);
-    const missileColor = isEnemy ? 0xff3300 : 0xffffff;
+    const missileColor = isEnemy ? 0xff3300 : 0xff8800;
     const missileMat = new THREE.MeshBasicMaterial({
         color: missileColor,
         transparent: true,
         opacity: 0.95,
-        blending: isEnemy ? THREE.NormalBlending : THREE.AdditiveBlending,
+        blending: THREE.AdditiveBlending,
         depthWrite: false,
         fog: false
     });
@@ -1151,9 +1151,9 @@ function fireMissile(source, isEnemy, opts = {}) {
         const glow = new THREE.Mesh(
             new THREE.SphereGeometry(0.3, 10, 10),
             new THREE.MeshBasicMaterial({
-                color: 0xffffff,
+                color: 0xffaa33,
                 transparent: true,
-                opacity: 0.4,
+                opacity: 0.6,
                 blending: THREE.AdditiveBlending,
                 depthWrite: false,
                 fog: false
