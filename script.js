@@ -9,7 +9,7 @@ const CONFIG = {
     turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
     bulletSpeed: 6.0, 
-    missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
+    missileSpeedMultiplier: 1.5, // Missiles move at ~1.5x the player's current speed
     missileCapacity: 20,
     missileReloadTimeMs: 30000, // 30s reload when missiles are depleted
     enemySpeed: 0.5,
