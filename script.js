@@ -20,12 +20,27 @@ const CONFIG = {
     enemyApproachDistance: 1300,
     enemyHoldDistance: 650,
     enemyEvadeDistance: 450,
+    enemyWaveMaxSizeIncrease: 3,
+    enemyWaveMinDistance: 500,
+    enemyWaveDistanceRange: 400,
     seaSize: 2000,
     fireRate: 80 // ms between shots
 };
 
 const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
 const NET_DEFAULT_URL = 'ws://localhost:3001';
+const FORMATION_TYPES = {
+    DELTA: 'DELTA',
+    LINE_ABREAST: 'LINE_ABREAST',
+    ECHELON_RIGHT: 'ECHELON_RIGHT',
+    STACK: 'STACK'
+};
+const ENEMY_FORMATIONS = [
+    { type: FORMATION_TYPES.DELTA, size: 5, spacing: 30 },
+    { type: FORMATION_TYPES.LINE_ABREAST, size: 6, spacing: 28 },
+    { type: FORMATION_TYPES.ECHELON_RIGHT, size: 4, spacing: 32 },
+    { type: FORMATION_TYPES.STACK, size: 5, spacing: 26 }
+];
 
 // Globals
 let scene, camera, renderer;
@@ -61,6 +76,7 @@ let turboCharge = 1;
 let turboLocked = false;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
+let waveIndex = 0;
 
 // UI Refs
 const ui = {
@@ -217,8 +233,9 @@ function startGame(stage, opts = {}) {
     setScreen('playing');
     ui.gameOverMsg.style.display = 'none';
 
+    waveIndex = 0;
     if(gameMode !== GAME_MODES.ONLINE_VS && (gameMode !== GAME_MODES.ONLINE_COOP || isNetHost)) {
-        for(let i=0; i<8; i++) spawnEnemy();
+        spawnFormationWave(waveIndex);
     }
     
     animate();
@@ -396,7 +413,7 @@ class NetClient {
             case 'host-grant':
                 isNetHost = true;
                 if(gameMode === GAME_MODES.ONLINE_COOP && enemies.length === 0) {
-                    for(let i=0; i<10; i++) spawnEnemy();
+                    spawnFormationWave(waveIndex);
                 }
                 break;
             case 'matching':
@@ -817,16 +834,91 @@ function syncEnemiesFromSnapshot(snapshot) {
     pendingEnemySnapshot = null;
 }
 
-function spawnEnemy() {
+function spawnEnemy(opts = {}) {
     const e = createEnemy();
     e.id = ++enemyIdCounter;
     e.hp = 1;
     const angle = Math.random() * Math.PI * 2;
     const dist = 400 + Math.random() * 300;
-    e.mesh.position.set(player.mesh.position.x + Math.cos(angle)*dist, 50, player.mesh.position.z + Math.sin(angle)*dist);
+    const fallbackPos = new THREE.Vector3(
+        player.mesh.position.x + Math.cos(angle) * dist,
+        DEFAULT_SPAWN_HEIGHT,
+        player.mesh.position.z + Math.sin(angle) * dist
+    );
+    const pos = opts.position || fallbackPos;
+    e.mesh.position.copy(pos);
+
+    if(opts.forward) {
+        const forward = opts.forward.clone().normalize();
+        const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), forward);
+        e.mesh.quaternion.copy(targetQuat);
+    }
+
     scene.add(e.mesh);
     enemies.push(e);
     attachEnemyMarker(e);
+}
+
+function spawnFormationWave(index = 0) {
+    const base = ENEMY_FORMATIONS[index % ENEMY_FORMATIONS.length];
+    const size = base.size + Math.min(CONFIG.enemyWaveMaxSizeIncrease, Math.floor(index / ENEMY_FORMATIONS.length));
+    const spacing = base.spacing;
+    const leaderDistance = CONFIG.enemyWaveMinDistance + Math.random() * CONFIG.enemyWaveDistanceRange;
+    const angle = Math.random() * Math.PI * 2;
+    const leaderPos = new THREE.Vector3(
+        player.mesh.position.x + Math.cos(angle) * leaderDistance,
+        DEFAULT_SPAWN_HEIGHT,
+        player.mesh.position.z + Math.sin(angle) * leaderDistance
+    );
+    const forward = new THREE.Vector3().subVectors(player.mesh.position, leaderPos).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
+
+    const offsets = buildFormationOffsets(base.type, size, spacing);
+    offsets.forEach(off => {
+        const worldPos = leaderPos.clone()
+            .add(right.clone().multiplyScalar(off.x))
+            .add(new THREE.Vector3(0, off.y, 0))
+            .add(forward.clone().multiplyScalar(off.z));
+        spawnEnemy({ position: worldPos, forward });
+    });
+}
+
+function buildFormationOffsets(type, size, spacing) {
+    const offsets = [new THREE.Vector3(0, 0, 0)];
+    for(let i=1; i<size; i++) {
+        switch(type) {
+            case FORMATION_TYPES.LINE_ABREAST: {
+                const side = (i % 2 === 0) ? 1 : -1;
+                const column = Math.floor((i+1)/2);
+                offsets.push(new THREE.Vector3(side * spacing * column, 0, 0));
+                break;
+            }
+            case FORMATION_TYPES.ECHELON_RIGHT: {
+                offsets.push(new THREE.Vector3(spacing * i, 0, spacing * i * 0.4));
+                break;
+            }
+            case FORMATION_TYPES.STACK: {
+                offsets.push(new THREE.Vector3( (i % 2 === 0 ? 1 : -1) * spacing * 0.6, 0, spacing * Math.floor(i/2) * 0.7));
+                break;
+            }
+            case FORMATION_TYPES.DELTA:
+            default: {
+                const rank = Math.floor((i+1)/2);
+                const side = (i % 2 === 0) ? 1 : -1;
+                offsets.push(new THREE.Vector3(side * spacing * rank, 0, spacing * rank));
+                break;
+            }
+        }
+    }
+    return offsets;
+}
+
+function ensureWaveContinuity(runEnemies) {
+    if(!isPlaying || !runEnemies) return;
+    if(enemies.length === 0) {
+        waveIndex++;
+        spawnFormationWave(waveIndex);
+    }
 }
 
 function attachEnemyMarker(enemy) {
@@ -1184,7 +1276,7 @@ function animate() {
                             hit = true; createExplosion(enemies[j].mesh.position, 3);
                             if(enemies[j].marker) enemies[j].marker.remove();
                             scene.remove(enemies[j].mesh); enemies.splice(j, 1);
-                            score += 100; setTimeout(spawnEnemy, 2000);
+                            score += 100;
                         }
                     }
                 }
@@ -1204,7 +1296,7 @@ function animate() {
 
         if(runEnemies) {
             if(dist > 2500) {
-                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); spawnEnemy(); continue;
+                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); continue;
             }
 
             e.stateTimer = (e.stateTimer || 0) + dt;
@@ -1294,6 +1386,8 @@ function animate() {
             } else rp.marker.style.display='none';
         }
     }
+
+    ensureWaveContinuity(runEnemies);
 
     if(runEnemies && gameMode === GAME_MODES.ONLINE_COOP && netClient && netClient.isOpen()) {
         const now = Date.now();
