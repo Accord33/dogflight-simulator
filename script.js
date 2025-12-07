@@ -20,7 +20,7 @@ const CONFIG = {
     enemyApproachDistance: 1300,
     enemyHoldDistance: 650,
     enemyEvadeDistance: 450,
-    enemyGunRange: 900,
+    enemyGunRange: 800,
     enemyGunHitRadius: 2.6,
     playerGunHitRadius: 3.2,
     enemyFireProfiles: {
@@ -509,7 +509,6 @@ function computeLeadQuaternion(shooter, toTargetVec) {
     const predictedPos = player.mesh.position.clone().add(relativeVel.multiplyScalar(timeToImpact));
     const aimDir = predictedPos.sub(shooter.mesh.position);
     if(aimDir.lengthSq() < 0.0001) aimDir.copy(toTargetVec);
-    aimDir.y = 0;
     aimDir.normalize();
     return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), aimDir);
 }
