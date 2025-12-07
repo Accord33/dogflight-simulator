@@ -103,12 +103,15 @@ let turboLocked = false;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
 let waveIndex = 0;
+let missileStatusTimer = null;
 
 // UI Refs
 const ui = {
     score: document.getElementById('score-val'),
     hpBar: document.getElementById('hp-bar-fill'),
     missile: document.getElementById('missile-val'),
+    missileStatus: document.getElementById('missile-status'),
+    missileStatusText: document.getElementById('missile-status-text'),
     radar: document.getElementById('radar-container'),
     alert: document.getElementById('missile-alert'),
     msg: document.getElementById('message-area'),
@@ -255,6 +258,7 @@ function startGame(stage, opts = {}) {
     player.mesh.add(muzzleFlashLight);
     muzzleFlashLight.position.set(0, 0, -3); // Near noise
 
+    setMissileStatus('idle');
     updateUI();
     setScreen('playing');
     ui.gameOverMsg.style.display = 'none';
@@ -270,6 +274,7 @@ function startGame(stage, opts = {}) {
 function gameOver(outcome='LOSE') {
     if(!isPlaying) return;
     isPlaying = false;
+    setMissileStatus('idle');
     if(gameMode !== GAME_MODES.ONLINE_VS) {
         saveScore(score);
         updateHighScoreDisplay();
@@ -814,6 +819,14 @@ function resolveMissileTarget(msg) {
     return null;
 }
 
+function getLocalOwnerId() {
+    return netPlayerId || 'local';
+}
+
+function isLocalPlayerMissile(p) {
+    return !p.isEnemy && p.ownerId === getLocalOwnerId();
+}
+
 function hashStringToAngle(str) {
     if(!str) return 0;
     let h = 0;
@@ -1157,6 +1170,10 @@ function fireMissile(source, isEnemy, opts = {}) {
     const missileSpeed = (source.speed || player.speed) * CONFIG.missileSpeedMultiplier;
     missiles.push({ mesh: m, target: target, targetType, targetId, life: 300, speed: missileSpeed, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
 
+    if(!isEnemy && !opts.fromRemote && source === player) {
+        setMissileStatus('track');
+    }
+
     if(gameMode !== GAME_MODES.LOCAL && !opts.fromRemote) {
         sendNet('action', {
             action: 'fireMissile',
@@ -1186,6 +1203,35 @@ function createExplosion(pos, scale) {
 function showMessage(txt, dur) {
     ui.msg.innerText = txt; ui.msg.style.opacity = 1;
     setTimeout(() => ui.msg.style.opacity = 0, dur);
+}
+function setMissileStatus(state='idle') {
+    if(!ui.missileStatus || !ui.missileStatusText) return;
+    if(missileStatusTimer) {
+        clearTimeout(missileStatusTimer);
+        missileStatusTimer = null;
+    }
+    ui.missileStatus.classList.remove('hit','miss','track');
+    let text = '—';
+    switch(state) {
+        case 'track':
+            text = 'TRACKING';
+            ui.missileStatus.classList.add('track');
+            break;
+        case 'hit':
+            text = 'HIT CONFIRMED';
+            ui.missileStatus.classList.add('hit');
+            break;
+        case 'miss':
+            text = 'NO IMPACT';
+            ui.missileStatus.classList.add('miss');
+            break;
+        default:
+            text = '—';
+    }
+    ui.missileStatusText.innerText = text;
+    if(state === 'hit' || state === 'miss') {
+        missileStatusTimer = setTimeout(() => setMissileStatus('idle'), 1800);
+    }
 }
 function updateUI() {
     ui.score.innerText = score;
@@ -1408,15 +1454,17 @@ function animate() {
             }
             
             let hit = false;
+            let impactType = null;
+            const localMissile = arr === missiles && isLocalPlayerMissile(p);
             const hitRadius = p.isEnemy ? CONFIG.enemyGunHitRadius : CONFIG.playerGunHitRadius;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < hitRadius) { hit = true; armor -= 10; stats.damageTaken += 10; createExplosion(p.mesh.position, 1); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < hitRadius) { hit = true; impactType = 'player'; armor -= 10; stats.damageTaken += 10; createExplosion(p.mesh.position, 1); }
             } else {
                 if(isVs) {
                     for(const id in remotePlayers) {
                         const rp = remotePlayers[id];
                         if(rp && rp.mesh.position.distanceTo(p.mesh.position) < hitRadius) {
-                            hit = true; createExplosion(rp.mesh.position, 3);
+                            hit = true; impactType = 'pvp'; createExplosion(rp.mesh.position, 3);
                             sendNet('hit', { targetId: id, amount: 10 });
                             stats.damageDealt += 10;
                         }
@@ -1425,7 +1473,7 @@ function animate() {
                 if(allowEnemyDamage) {
                     for(let j=enemies.length-1; j>=0; j--) {
                         if(p.mesh.position.distanceTo(enemies[j].mesh.position) < hitRadius) {
-                            hit = true; createExplosion(enemies[j].mesh.position, 3);
+                            hit = true; impactType = 'enemy'; createExplosion(enemies[j].mesh.position, 3);
                             if(enemies[j].marker) enemies[j].marker.remove();
                             scene.remove(enemies[j].mesh); enemies.splice(j, 1);
                             score += 100;
@@ -1433,8 +1481,15 @@ function animate() {
                     }
                 }
             }
-            for(let o of obstacles) if(p.mesh.position.distanceTo(o.position) < o.scale.y/2) hit = true;
-            if(hit || p.life<=0) { scene.remove(p.mesh); arr.splice(i,1); }
+            for(let o of obstacles) if(p.mesh.position.distanceTo(o.position) < o.scale.y/2) { hit = true; if(!impactType) impactType = 'obstacle'; }
+            const expired = p.life<=0;
+            if(hit || expired) {
+                if(localMissile) {
+                    if(impactType === 'enemy' || impactType === 'pvp') setMissileStatus('hit');
+                    else setMissileStatus('miss');
+                }
+                scene.remove(p.mesh); arr.splice(i,1);
+            }
         }
     });
 

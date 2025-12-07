@@ -79,6 +79,12 @@ body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Orbitr
 .missile-display { display: flex; align-items: baseline; gap: 15px; }
 #missile-val { font-size: 2.5rem; }
 #missile-val.reloading { color: var(--secondary-color); opacity: 0.8; }
+.missile-status { display: flex; align-items: center; gap: 12px; opacity: 0.9; }
+.missile-status .hud-label { display: inline-block; margin-bottom: 0; }
+#missile-status-text { font-size: 1.1rem; letter-spacing: 3px; color: #d8eaff; transition: color 0.2s ease, text-shadow 0.2s ease; }
+.missile-status.track #missile-status-text { color: #aaddff; text-shadow: 0 0 10px rgba(170,221,255,0.6); }
+.missile-status.hit #missile-status-text { color: #7cffb2; text-shadow: 0 0 12px rgba(124,255,178,0.8); }
+.missile-status.miss #missile-status-text { color: #ff7b7b; text-shadow: 0 0 12px rgba(255,123,123,0.7); }
 .speed-display { display: flex; align-items: baseline; gap: 15px; }
 #speed-val { font-size: 2.2rem; }
 .turbo-display { display: flex; align-items: center; gap: 12px; width: 300px; }
