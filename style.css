@@ -81,6 +81,23 @@ body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Orbitr
 #missile-val.reloading { color: var(--secondary-color); opacity: 0.8; }
 .speed-display { display: flex; align-items: baseline; gap: 15px; }
 #speed-val { font-size: 2.2rem; }
+.turbo-display { display: flex; align-items: center; gap: 12px; width: 300px; }
+.turbo-bar-frame {
+    flex: 1;
+    height: 10px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.3);
+    transform: skewX(-30deg);
+    overflow: hidden;
+}
+#turbo-bar-fill {
+    height: 100%;
+    width: 100%;
+    background: #00ffff;
+    box-shadow: 0 0 8px #00ffff;
+    transition: width 0.1s linear;
+}
+#turbo-val { font-size: 1.3rem; }
 
 /* Radar */
 #radar-container {

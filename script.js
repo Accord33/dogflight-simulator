@@ -3,6 +3,8 @@ const CONFIG = {
     cruiseSpeed: 1.0,
     speedResponse: 0.08,
     turboMultiplier: 1.7,
+    turboChargeRate: 0.22, // per second
+    turboDrainRate: 0.7, // per second while turbo is active
     playerFlameColor: 0x00ffff,
     turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
@@ -29,6 +31,8 @@ const NET_DEFAULT_URL = 'ws://localhost:3001';
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
+const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
+const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
 let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
@@ -53,6 +57,7 @@ const DEFAULT_SPAWN_HEIGHT = 50;
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
+let turboCharge = 1;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
 
@@ -72,7 +77,9 @@ const ui = {
     lives: document.getElementById('lives-val'),
     livesPanel: document.getElementById('lives-panel'),
     waitingText: document.getElementById('waiting-text'),
-    speed: document.getElementById('speed-val')
+    speed: document.getElementById('speed-val'),
+    turboBar: document.getElementById('turbo-bar-fill'),
+    turboVal: document.getElementById('turbo-val')
 };
 const screens = {
     title: document.getElementById('title-screen'),
@@ -186,6 +193,7 @@ function startGame(stage, opts = {}) {
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
     lives = (gameMode === GAME_MODES.ONLINE_VS) ? 3 : 1;
     stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
+    turboCharge = 1;
     lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
@@ -957,13 +965,20 @@ function updateUI() {
             if(ui.livesPanel) ui.livesPanel.style.display = 'none';
         }
     }
-    updateSpeedDisplay();
 }
 
 function updateSpeedDisplay() {
     if(!ui.speed) return;
     const currentSpeed = player && player.speed ? player.speed : CONFIG.cruiseSpeed;
     ui.speed.innerText = currentSpeed.toFixed(2);
+}
+function updateTurboDisplay() {
+    if(!ui.turboBar || !ui.turboVal) return;
+    const pct = Math.floor(turboCharge * 100);
+    ui.turboBar.style.width = pct + '%';
+    ui.turboVal.innerText = pct + '%';
+    ui.turboBar.style.background = pct > 20 ? '#00ffff' : '#ff7b47';
+    ui.turboBar.style.boxShadow = pct > 20 ? '0 0 8px #00ffff' : '0 0 8px #ff7b47';
 }
 function saveScore(s) {
     let sc = JSON.parse(localStorage.getItem(scoreListKey)||'[]'); sc.push(s);
@@ -1041,13 +1056,21 @@ function animate() {
         }
     }
 
+    const turboActive = keys.turbo && turboCharge > 0.02;
+    if(turboActive) {
+        turboCharge = Math.max(0, turboCharge - CONFIG.turboDrainRate * dt);
+    } else {
+        const regenFactor = Math.max(0.5, player.speed / CONFIG.playerSpeedMax);
+        turboCharge = Math.min(1, turboCharge + CONFIG.turboChargeRate * regenFactor * dt);
+    }
+
     // Player Move
-    const targetSpeed = keys.turbo
-        ? CONFIG.playerSpeedMax * CONFIG.turboMultiplier
+    const turboSpeed = CONFIG.playerSpeedMax * CONFIG.turboMultiplier;
+    const targetSpeed = turboActive
+        ? turboSpeed
         : (keys.s ? CONFIG.playerSpeedMin : CONFIG.cruiseSpeed);
     player.speed += (targetSpeed - player.speed) * CONFIG.speedResponse;
-    const maxSpeed = CONFIG.playerSpeedMax * CONFIG.turboMultiplier;
-    player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, maxSpeed));
+    player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
     player.mesh.rotation.y += turn * CONFIG.turnSpeed;
@@ -1058,10 +1081,9 @@ function animate() {
     player.mesh.position.add(fwd);
     if(player.flame) {
         player.flame.scale.z = player.speed * 2;
-        const flameTarget = keys.turbo ? CONFIG.turboFlameColor : CONFIG.playerFlameColor;
-        player.flame.material.color.lerp(new THREE.Color(flameTarget), 0.2);
+        const flameTargetColor = turboActive ? TURBO_FLAME_COLOR : PLAYER_FLAME_COLOR;
+        player.flame.material.color.lerp(flameTargetColor, 0.2);
     }
-    updateSpeedDisplay();
 
     const camOff = new THREE.Vector3(0, 5, 15).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
