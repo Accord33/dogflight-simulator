@@ -15,7 +15,7 @@ const CONFIG = {
     rollSpeed: 0.03,
     rollDamping: 0.015,
     maxRoll: Math.PI * 0.9,
-    bankTurnInfluence: 0.06,
+    bankTurnInfluence: 0.0,
     aimAssistMaxAngle: Math.PI / 18, // ~10 degrees
     aimAssistMaxDistance: 280,
     aimAssistMaxBlend: 0.55,
