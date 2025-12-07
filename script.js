@@ -10,8 +10,9 @@ const CONFIG = {
     enemyStrafeSpeed: 0.65,
     enemyEvadeSpeed: 0.9,
     enemyTurnLerp: 0.15,
-    enemyApproachDistance: 900,
-    enemyEvadeDistance: 250,
+    enemyApproachDistance: 1300,
+    enemyHoldDistance: 650,
+    enemyEvadeDistance: 450,
     seaSize: 2000,
     fireRate: 80 // ms between shots
 };
@@ -201,7 +202,7 @@ function startGame(stage, opts = {}) {
     ui.gameOverMsg.style.display = 'none';
 
     if(gameMode !== GAME_MODES.ONLINE_VS && (gameMode !== GAME_MODES.ONLINE_COOP || isNetHost)) {
-        for(let i=0; i<10; i++) spawnEnemy();
+        for(let i=0; i<8; i++) spawnEnemy();
     }
     
     animate();
@@ -804,7 +805,7 @@ function spawnEnemy() {
     e.id = ++enemyIdCounter;
     e.hp = 1;
     const angle = Math.random() * Math.PI * 2;
-    const dist = 150 + Math.random() * 200;
+    const dist = 400 + Math.random() * 300;
     e.mesh.position.set(player.mesh.position.x + Math.cos(angle)*dist, 50, player.mesh.position.z + Math.sin(angle)*dist);
     scene.add(e.mesh);
     enemies.push(e);
@@ -1168,15 +1169,31 @@ function animate() {
                 desiredSpeed = CONFIG.enemyApproachSpeed;
             } else if(e.state === 'strafe') {
                 const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(0.7 * (e.strafeDir || 1));
-                desiredDir.add(side).normalize();
+                const rangeError = dist - CONFIG.enemyHoldDistance;
+                desiredDir.add(side);
+                desiredDir.add(baseDir.clone().multiplyScalar(rangeError > 0 ? 0.35 : -0.35));
+                desiredDir.normalize();
                 desiredSpeed = CONFIG.enemyStrafeSpeed;
                 if(e.stateTimer > 2.5) { e.strafeDir *= -1; e.stateTimer = 0; }
             } else {
                 const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(1.0 * (e.strafeDir || 1));
                 desiredDir = baseDir.clone().multiplyScalar(0.3).add(side).normalize();
                 desiredSpeed = CONFIG.enemyEvadeSpeed;
-                if(e.stateTimer > 1.5 && dist > CONFIG.enemyEvadeDistance * 1.5) e.state = 'approach';
+                if(e.stateTimer > 1.5 && dist > CONFIG.enemyHoldDistance) e.state = 'approach';
             }
+
+            // Light separation so enemies don't stack too close
+            const sep = new THREE.Vector3();
+            for(let j=0; j<enemies.length; j++) {
+                if(i === j) continue;
+                const other = enemies[j];
+                const diff = new THREE.Vector3().subVectors(e.mesh.position, other.mesh.position);
+                const d = diff.length();
+                if(d > 0 && d < 220) {
+                    sep.add(diff.normalize().multiplyScalar((220 - d) / 220));
+                }
+            }
+            desiredDir.add(sep.multiplyScalar(0.6)).normalize();
 
             e.velocity = e.velocity || new THREE.Vector3();
             const targetVel = desiredDir.multiplyScalar(desiredSpeed);
