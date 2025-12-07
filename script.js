@@ -1,5 +1,12 @@
 const CONFIG = {
     playerSpeedMin: 0.3, playerSpeedMax: 1.2,
+    cruiseSpeed: 1.0,
+    speedResponse: 0.08,
+    turboMultiplier: 1.7,
+    turboChargeRate: 0.22, // per second
+    turboDrainRate: 0.7, // per second while turbo is active
+    playerFlameColor: 0x00ffff,
+    turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
     bulletSpeed: 6.0, 
     missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
@@ -24,7 +31,9 @@ const NET_DEFAULT_URL = 'ws://localhost:3001';
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
-let keys = { w: false, s: false, a: false, d: false, space: false };
+const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
+const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
+let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
 
@@ -48,6 +57,7 @@ const DEFAULT_SPAWN_HEIGHT = 50;
 let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
+let turboCharge = 1;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
 
@@ -66,7 +76,10 @@ const ui = {
     netBadge: document.getElementById('net-badge'),
     lives: document.getElementById('lives-val'),
     livesPanel: document.getElementById('lives-panel'),
-    waitingText: document.getElementById('waiting-text')
+    waitingText: document.getElementById('waiting-text'),
+    speed: document.getElementById('speed-val'),
+    turboBar: document.getElementById('turbo-bar-fill'),
+    turboVal: document.getElementById('turbo-val')
 };
 const screens = {
     title: document.getElementById('title-screen'),
@@ -180,6 +193,7 @@ function startGame(stage, opts = {}) {
     score = 0; armor = 100; missileCount = CONFIG.missileCapacity; missileReloadEndTime = null;
     lives = (gameMode === GAME_MODES.ONLINE_VS) ? 3 : 1;
     stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
+    turboCharge = 1;
     lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
@@ -579,10 +593,11 @@ function createPlayer(options = {}) {
     
     let flame = null;
     if(!options.disableFlame) {
-        flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color: options.flameColor || 0x00ffff, transparent:true, opacity:0.8}));
+        const flameColor = options.flameColor || CONFIG.playerFlameColor;
+        flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color: flameColor, transparent:true, opacity:0.8}));
         flame.rotateX(-Math.PI/2); flame.position.z = 4; group.add(flame);
     }
-    return { mesh: group, speed: CONFIG.playerSpeedMin, flame: flame };
+    return { mesh: group, speed: CONFIG.cruiseSpeed, flame: flame };
 }
 
 function createEnemy() {
@@ -951,6 +966,20 @@ function updateUI() {
         }
     }
 }
+
+function updateSpeedDisplay() {
+    if(!ui.speed) return;
+    const currentSpeed = player && player.speed ? player.speed : CONFIG.cruiseSpeed;
+    ui.speed.innerText = currentSpeed.toFixed(2);
+}
+function updateTurboDisplay() {
+    if(!ui.turboBar || !ui.turboVal) return;
+    const pct = Math.floor(turboCharge * 100);
+    ui.turboBar.style.width = pct + '%';
+    ui.turboVal.innerText = pct + '%';
+    ui.turboBar.style.background = pct > 20 ? '#00ffff' : '#ff7b47';
+    ui.turboBar.style.boxShadow = pct > 20 ? '0 0 8px #00ffff' : '0 0 8px #ff7b47';
+}
 function saveScore(s) {
     let sc = JSON.parse(localStorage.getItem(scoreListKey)||'[]'); sc.push(s);
     sc.sort((a,b)=>b-a); sc=sc.slice(0,5); localStorage.setItem(scoreListKey, JSON.stringify(sc));
@@ -967,6 +996,7 @@ function updateHighScoreDisplay() {
 }
 function onKey(e, down) {
     const k = e.key.toLowerCase();
+    if(k === 'shift') { keys.turbo = down; return; }
     if(keys[k] !== undefined) keys[k] = down;
     if(k === ' ' && down) fireMissile(player, false);
 }
@@ -1026,10 +1056,21 @@ function animate() {
         }
     }
 
+    const turboActive = keys.turbo && turboCharge > 0.02;
+    if(turboActive) {
+        turboCharge = Math.max(0, turboCharge - CONFIG.turboDrainRate * dt);
+    } else {
+        const regenFactor = Math.max(0.5, player.speed / CONFIG.playerSpeedMax);
+        turboCharge = Math.min(1, turboCharge + CONFIG.turboChargeRate * regenFactor * dt);
+    }
+
     // Player Move
-    if(keys.w) player.speed = Math.min(player.speed+0.05, CONFIG.playerSpeedMax);
-    else if(keys.s) player.speed = Math.max(player.speed-0.05, CONFIG.playerSpeedMin);
-    else player.speed += (1.0 - player.speed) * 0.01;
+    const turboSpeed = CONFIG.playerSpeedMax * CONFIG.turboMultiplier;
+    const targetSpeed = turboActive
+        ? turboSpeed
+        : (keys.s ? CONFIG.playerSpeedMin : CONFIG.cruiseSpeed);
+    player.speed += (targetSpeed - player.speed) * CONFIG.speedResponse;
+    player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
     player.mesh.rotation.y += turn * CONFIG.turnSpeed;
@@ -1038,7 +1079,11 @@ function animate() {
 
     const fwd = new THREE.Vector3(0,0,-player.speed).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     player.mesh.position.add(fwd);
-    player.flame.scale.z = player.speed * 2;
+    if(player.flame) {
+        player.flame.scale.z = player.speed * 2;
+        const flameTargetColor = turboActive ? TURBO_FLAME_COLOR : PLAYER_FLAME_COLOR;
+        player.flame.material.color.lerp(flameTargetColor, 0.2);
+    }
 
     const camOff = new THREE.Vector3(0, 5, 15).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
