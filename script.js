@@ -690,7 +690,8 @@ function createEnemy() {
         nextShotAt: 0,
         nextBurstAt: 0,
         missileQueued: false,
-        nextMissileWindow: 0
+        nextMissileWindow: 0,
+        lastMissilePhase: null
     };
 }
 
@@ -699,8 +700,15 @@ function getEnemyFireProfile(state) {
 }
 
 function handleEnemyGunAttack(enemy, toPlayer, dist, now) {
+    if(enemy.state === ENEMY_STATES.REGROUP) { enemy.burstRemaining = 0; return; }
     if(dist > CONFIG.enemyGunRange) { enemy.burstRemaining = 0; return; }
-    const profile = getEnemyFireProfile(enemy.state);
+    const profile = { ...getEnemyFireProfile(enemy.state) };
+    if(enemy.state === ENEMY_STATES.SLASH_PAST) {
+        profile.maxAngle = Math.min(profile.maxAngle, 0.55);
+        profile.fireIntervalMs = Math.max(profile.fireIntervalMs, 420);
+        profile.burstCooldownMs = Math.max(profile.burstCooldownMs, 1600);
+        profile.burst = Math.min(profile.burst, 3);
+    }
     const forward = new THREE.Vector3(0,0,-1).applyQuaternion(enemy.mesh.quaternion);
     const angle = forward.angleTo(toPlayer.clone().normalize());
     if(angle > profile.maxAngle) { enemy.burstRemaining = 0; return; }
@@ -723,13 +731,25 @@ function handleEnemyGunAttack(enemy, toPlayer, dist, now) {
 }
 
 function queueEnemyMissile(enemy, toPlayer, dist, now) {
-    const cfg = CONFIG.enemyMissileScheduler;
+    if(enemy.state === ENEMY_STATES.REGROUP) return;
+    const cfg = { ...CONFIG.enemyMissileScheduler };
+    if(enemy.state === ENEMY_STATES.SPLIT_ATTACK) {
+        cfg.requeueDelayMs = Math.max(1800, cfg.requeueDelayMs * 0.55);
+        cfg.staggerMs = Math.max(250, cfg.staggerMs * 0.6);
+        if(enemy.lastMissilePhase !== ENEMY_STATES.SPLIT_ATTACK) {
+            enemy.nextMissileWindow = Math.min(enemy.nextMissileWindow, now);
+        }
+    }
+    enemy.lastMissilePhase = enemy.state;
     if(dist < cfg.minRange || dist > cfg.maxRange) return;
     const forward = new THREE.Vector3(0,0,-1).applyQuaternion(enemy.mesh.quaternion);
     const angle = forward.angleTo(toPlayer.clone().normalize());
     if(angle > cfg.maxAngle) return;
     if(enemy.missileQueued || now < enemy.nextMissileWindow) return;
-    missileQueue.push({ enemyId: enemy.id, time: now + cfg.staggerMs * missileQueue.length });
+    const staggerRankings = { leader: 0, high: 1, low: 1, right: 2, left: 2 };
+    const roleIndex = staggerRankings.hasOwnProperty(enemy.role) ? staggerRankings[enemy.role] : 3;
+    const queueTime = now + cfg.staggerMs * (roleIndex + missileQueue.length);
+    missileQueue.push({ enemyId: enemy.id, time: queueTime });
     enemy.missileQueued = true;
     enemy.nextMissileWindow = now + cfg.requeueDelayMs;
 }
