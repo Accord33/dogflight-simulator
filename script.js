@@ -962,6 +962,8 @@ function spawnEnemy(opts = {}) {
     scene.add(e.mesh);
     enemies.push(e);
     attachEnemyMarker(e);
+
+    return e;
 }
 
 function spawnFormationWave(index = 0) {
@@ -979,12 +981,19 @@ function spawnFormationWave(index = 0) {
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
 
     const offsets = buildFormationOffsets(base.type, size, spacing);
-    offsets.forEach(off => {
+    offsets.forEach((off, i) => {
         const worldPos = leaderPos.clone()
-            .add(right.clone().multiplyScalar(off.x))
-            .add(new THREE.Vector3(0, off.y, 0))
-            .add(forward.clone().multiplyScalar(off.z));
-        spawnEnemy({ position: worldPos, forward });
+            .add(right.clone().multiplyScalar(off.offset.x))
+            .add(new THREE.Vector3(0, off.offset.y, 0))
+            .add(forward.clone().multiplyScalar(off.offset.z));
+        const enemy = spawnEnemy({ position: worldPos, forward });
+        if(enemy) {
+            enemy.waveId = index;
+            enemy.isLeader = i === 0;
+            enemy.formationOffset = off.offset.clone();
+            enemy.role = off.role;
+            enemy.attackBearing = off.attackBearing;
+        }
     });
 }
 
@@ -1003,7 +1012,9 @@ function buildFormationOffsets(type, size, spacing) {
                 break;
             }
             case FORMATION_TYPES.STACK: {
-                offsets.push(new THREE.Vector3( (i % 2 === 0 ? 1 : -1) * spacing * 0.6, 0, spacing * Math.floor(i/2) * 0.7));
+                const lane = Math.floor(i/2);
+                const altitude = ((i % 2 === 0) ? 1 : -1) * spacing * 0.35;
+                offsets.push(new THREE.Vector3((i % 2 === 0 ? 1 : -1) * spacing * 0.6, altitude, spacing * lane * 0.7));
                 break;
             }
             case FORMATION_TYPES.DELTA:
@@ -1015,7 +1026,22 @@ function buildFormationOffsets(type, size, spacing) {
             }
         }
     }
-    return offsets;
+    return offsets.map((offset, idx) => {
+        const role = idx === 0
+            ? 'leader'
+            : offset.y > 0
+                ? 'high'
+                : offset.y < 0
+                    ? 'low'
+                    : offset.x > 0
+                        ? 'right'
+                        : 'left';
+        const attackBearing = {
+            lateralSign: offset.x !== 0 ? Math.sign(offset.x) : (offset.z !== 0 ? Math.sign(offset.z) : 0),
+            verticalOffset: offset.y !== 0 ? Math.sign(offset.y) * 12 : 0
+        };
+        return { offset, role, attackBearing };
+    });
 }
 
 function ensureWaveContinuity(runEnemies) {
@@ -1443,8 +1469,13 @@ function animate() {
                     turnLerp = 0.1;
                     if(dist < CONFIG.enemyApproachDistance * 0.7 || e.stateTimer > 3.5) {
                         const offset = (e.formationOffset || new THREE.Vector3()).clone();
-                        const sideBias = offset.x !== 0 ? Math.sign(offset.x) : (Math.random() > 0.5 ? 1 : -1);
-                        const verticalBias = offset.z !== 0 ? Math.sign(offset.z) * 12 : (e.isLeader ? 0 : (Math.random() > 0.5 ? 10 : -10));
+                        const attackBearing = e.attackBearing || {};
+                        const sideBias = attackBearing.lateralSign || (offset.x !== 0 ? Math.sign(offset.x) : (Math.random() > 0.5 ? 1 : -1));
+                        const verticalBias = (typeof attackBearing.verticalOffset === 'number' && attackBearing.verticalOffset !== 0)
+                            ? attackBearing.verticalOffset
+                            : offset.z !== 0
+                                ? Math.sign(offset.z) * 12
+                                : (e.isLeader ? 0 : (Math.random() > 0.5 ? 10 : -10));
                         const lateral = new THREE.Vector3(0,1,0).cross(toP.clone().normalize()).normalize().multiplyScalar(140 * sideBias);
                         e.attackOffset = lateral.add(new THREE.Vector3(0, verticalBias, 0));
                         e.state = ENEMY_STATES.SPLIT_ATTACK;
