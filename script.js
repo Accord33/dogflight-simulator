@@ -40,7 +40,10 @@ let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
 const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
 const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
-let keys = { w: false, s: false, a: false, d: false, arrowup: false, arrowdown: false, space: false, turbo: false };
+let keys = { w: false, s: false, a: false, d: false, arrowup: false, arrowdown: false, space: false, turbo: false, brake: false };
+let debugLog = false;
+let nextDebugLog = 0;
+let debugState = { pitchInput: 0, turn: 0 };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
 
@@ -1048,6 +1051,8 @@ function updateHighScoreDisplay() {
 function onKey(e, down) {
     const k = e.key.toLowerCase();
     if(k === 'shift') { keys.turbo = down; return; }
+    if(k === 'c') { keys.brake = down; return; }
+    if(k === 'l') { if(down) { debugLog = !debugLog; nextDebugLog = 0; console.log(`DEBUG LOG ${debugLog ? 'ON' : 'OFF'}`); } return; }
     if(keys[k] !== undefined) keys[k] = down;
     if(k === ' ' && down) fireMissile(player, false);
 }
@@ -1128,12 +1133,14 @@ function animate() {
     const turboSpeed = CONFIG.playerSpeedMax * CONFIG.turboMultiplier;
     const targetSpeed = turboActive
         ? turboSpeed
-        : (keys.s ? CONFIG.playerSpeedMin : CONFIG.cruiseSpeed);
+        : (keys.brake ? CONFIG.playerSpeedMin : CONFIG.cruiseSpeed);
     player.speed += (targetSpeed - player.speed) * CONFIG.speedResponse;
     player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
     const pitchInput = (keys.w || keys.arrowup ? 1 : 0) + (keys.s || keys.arrowdown ? -1 : 0);
+    debugState.pitchInput = pitchInput;
+    debugState.turn = turn;
     player.mesh.rotation.x = THREE.MathUtils.clamp(
         player.mesh.rotation.x + pitchInput * CONFIG.pitchSpeed * (dt * 60),
         -CONFIG.maxPitch,
@@ -1431,6 +1438,30 @@ function animate() {
     }
     updateUI();
     renderer.render(scene, camera);
+
+    if(debugLog && nowFrame >= nextDebugLog) {
+        const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const planeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.mesh.quaternion);
+        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+        console.log('[DBG]', {
+            t: nowFrame,
+            keys: { w: keys.w, s: keys.s, up: keys.arrowup, down: keys.arrowdown, a: keys.a, d: keys.d, brake: keys.brake, turbo: keys.turbo },
+            pitchInput: debugState.pitchInput,
+            turn: debugState.turn,
+            rot: {
+                x: Number(player.mesh.rotation.x.toFixed(3)),
+                y: Number(player.mesh.rotation.y.toFixed(3)),
+                z: Number(player.mesh.rotation.z.toFixed(3))
+            },
+            speed: Number(player.speed.toFixed(3)),
+            altitude: Number(player.mesh.position.y.toFixed(2)),
+            turbo: Number(turboCharge.toFixed(2)),
+            camForward: { x: Number(camForward.x.toFixed(3)), y: Number(camForward.y.toFixed(3)), z: Number(camForward.z.toFixed(3)) },
+            planeForward: { x: Number(planeForward.x.toFixed(3)), y: Number(planeForward.y.toFixed(3)), z: Number(planeForward.z.toFixed(3)) },
+            camUp: { x: Number(camUp.x.toFixed(3)), y: Number(camUp.y.toFixed(3)), z: Number(camUp.z.toFixed(3)) }
+        });
+        nextDebugLog = nowFrame + 500;
+    }
 }
 
 init();
