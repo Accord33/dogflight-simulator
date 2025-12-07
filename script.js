@@ -12,6 +12,9 @@ const CONFIG = {
     maxPitch: Math.PI / 4,
     altitudeMin: 5,
     altitudeMax: 400,
+    aimAssistMaxAngle: Math.PI / 18, // ~10 degrees
+    aimAssistMaxDistance: 280,
+    aimAssistMaxBlend: 0.55,
     bulletSpeed: 6.0, 
     missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
     missileCapacity: 20,
@@ -416,6 +419,45 @@ class NetClient {
     }
 }
 
+function getAimAssistQuat(baseQuat, spawnPos) {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(baseQuat);
+    let bestDir = null;
+    let bestAngle = CONFIG.aimAssistMaxAngle;
+    let bestDist = Infinity;
+    const considerTarget = (targetPos) => {
+        if(!targetPos) return;
+        const to = targetPos.clone().sub(spawnPos);
+        const dist = to.length();
+        if(dist < 1 || dist > CONFIG.aimAssistMaxDistance) return;
+        const dir = to.normalize();
+        const ang = forward.angleTo(dir);
+        if(ang < bestAngle) {
+            bestAngle = ang;
+            bestDir = dir;
+            bestDist = dist;
+        }
+    };
+
+    if(gameMode === GAME_MODES.ONLINE_VS) {
+        Object.values(remotePlayers).forEach(rp => {
+            if(rp && rp.mesh) considerTarget(rp.mesh.position);
+        });
+    } else {
+        enemies.forEach(e => {
+            if(e && e.mesh) considerTarget(e.mesh.position);
+        });
+    }
+
+    if(!bestDir) return baseQuat;
+
+    const lookQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), bestDir);
+    const angleFactor = 1 - (bestAngle / CONFIG.aimAssistMaxAngle);
+    const distFactor = 1 - (bestDist / CONFIG.aimAssistMaxDistance);
+    const closeness = Math.max(0, angleFactor * 0.65 + distFactor * 0.35);
+    const strength = THREE.MathUtils.clamp(closeness * CONFIG.aimAssistMaxBlend, 0, CONFIG.aimAssistMaxBlend);
+    return baseQuat.clone().slerp(lookQuat, strength);
+}
+
 // --- Mechanics ---
 function fireBullet(source, isEnemy, opts = {}) {
     const now = Date.now();
@@ -453,12 +495,15 @@ function fireBullet(source, isEnemy, opts = {}) {
     }
     const spawnPos = opts.position || source.mesh.position.clone();
     const spawnQuat = opts.quaternion || source.mesh.quaternion.clone();
+    const finalQuat = (!isEnemy && source === player && !opts.fromRemote)
+        ? getAimAssistQuat(spawnQuat, spawnPos)
+        : spawnQuat;
     b.position.copy(spawnPos);
-    
+        
     // Adjust spawn pos slightly
     b.position.y -= 0.2; 
     
-    b.quaternion.copy(spawnQuat);
+    b.quaternion.copy(finalQuat);
     b.translateZ(-2);
     scene.add(b);
     bullets.push({ mesh: b, life: 80, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
@@ -475,7 +520,7 @@ function fireBullet(source, isEnemy, opts = {}) {
             action: 'fireBullet',
             isEnemy: isEnemy,
             position: { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z },
-            quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w }
+            quaternion: { x: finalQuat.x, y: finalQuat.y, z: finalQuat.z, w: finalQuat.w }
         });
     }
 }
@@ -1088,7 +1133,7 @@ function animate() {
     player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
-    const pitchInput = (keys.s || keys.arrowup ? 1 : 0) + (keys.w || keys.arrowdown ? -1 : 0);
+    const pitchInput = (keys.w || keys.arrowup ? 1 : 0) + (keys.s || keys.arrowdown ? -1 : 0);
     player.mesh.rotation.x = THREE.MathUtils.clamp(
         player.mesh.rotation.x + pitchInput * CONFIG.pitchSpeed * (dt * 60),
         -CONFIG.maxPitch,
@@ -1108,8 +1153,8 @@ function animate() {
     updateSpeedDisplay();
     updateTurboDisplay();
 
-    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
-    const camOff = new THREE.Vector3(0, 5, 15).applyQuaternion(yawQuat);
+    const baseCamOffset = new THREE.Vector3(0, 4.5, 15);
+    const camOff = baseCamOffset.clone().applyQuaternion(player.mesh.quaternion);
     const lookTarget = player.mesh.position.clone().add(new THREE.Vector3(0, 0, -20).applyQuaternion(player.mesh.quaternion));
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
     camera.lookAt(lookTarget);
