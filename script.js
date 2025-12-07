@@ -19,11 +19,61 @@ const CONFIG = {
 
 const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
 const NET_DEFAULT_URL = 'ws://localhost:3001';
+const SKY_PRESETS = {
+    OCEAN: {
+        skyTop: 0x4a83d4,
+        skyBottom: 0xcfe6ff,
+        horizon: 0x9ec8ff,
+        sunColor: 0xfff2d2,
+        sunDirection: new THREE.Vector3(0.35, 1.0, -0.25),
+        fog: { type: 'linear', color: 0x9ec8ff, near: 250, far: 1400 },
+        groundColor: 0x123654,
+        cloudTint: 0xffffff,
+        cloudOpacity: 0.6,
+        cloudHeight: 180,
+        cloudCount: 32,
+        cloudSize: [180, 320],
+        cloudWind: { x: 12, z: -6 }
+    },
+    CITY: {
+        skyTop: 0x060814,
+        skyBottom: 0x0f1728,
+        horizon: 0x161f38,
+        sunColor: 0xaec6ff,
+        sunDirection: new THREE.Vector3(-0.2, 0.35, -0.45),
+        fog: { type: 'exp', color: 0x050510, density: 0.0025 },
+        groundColor: 0x05060d,
+        cloudTint: 0x94a6c3,
+        cloudOpacity: 0.3,
+        cloudHeight: 230,
+        cloudCount: 18,
+        cloudSize: [140, 240],
+        cloudWind: { x: 6, z: -3 }
+    },
+    WASTELAND: {
+        skyTop: 0xc2874a,
+        skyBottom: 0xf3d7a6,
+        horizon: 0xe2b778,
+        sunColor: 0xffd8a0,
+        sunDirection: new THREE.Vector3(0.25, 1.0, 0.05),
+        fog: { type: 'exp', color: 0xcc9966, density: 0.0025 },
+        groundColor: 0x8b5a2b,
+        cloudTint: 0xfff3dc,
+        cloudOpacity: 0.5,
+        cloudHeight: 160,
+        cloudCount: 22,
+        cloudSize: [160, 300],
+        cloudWind: { x: 9, z: -5 }
+    }
+};
 
 // Globals
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
+let skyDome = null, cloudLayers = [], cloudTexture = null, cloudWind = { x: 0, z: 0 };
+let oceanMaterial = null, asphaltTexture = null, wastelandTexture = null;
+let currentSunDir = new THREE.Vector3(0.35, 1.0, -0.25);
 let keys = { w: false, s: false, a: false, d: false, space: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
@@ -184,6 +234,7 @@ function startGame(stage, opts = {}) {
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
     bullets = []; missiles = []; enemies = []; particles = []; obstacles = [];
+    skyDome = null; cloudLayers = []; cloudWind = { x: 0, z: 0 }; oceanMaterial = null;
     ui.markersLayer.innerHTML = ''; 
 
     setupEnvironment(stage);
@@ -464,72 +515,347 @@ function fireBullet(source, isEnemy, opts = {}) {
 // Re-implementing simplified versions for brevity while keeping new logic
 
 function setupEnvironment(stage) {
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+    const preset = SKY_PRESETS[stage] || SKY_PRESETS.OCEAN;
+    const hemi = new THREE.HemisphereLight(new THREE.Color(preset.skyBottom), new THREE.Color(preset.groundColor), 0.65);
+    scene.add(hemi);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.18);
     scene.add(ambient);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    sun.position.set(100, 200, 50);
+    const sun = new THREE.DirectionalLight(preset.sunColor, 1.0);
+    const sunDir = preset.sunDirection.clone().normalize();
+    sun.position.copy(sunDir.multiplyScalar(400));
     sun.castShadow = true;
     scene.add(sun);
+    currentSunDir = sunDir.clone();
+
+    scene.background = new THREE.Color(preset.skyTop);
+    if(preset.fog?.type === 'exp') scene.fog = new THREE.FogExp2(preset.fog.color, preset.fog.density);
+    else scene.fog = new THREE.Fog(preset.fog.color, preset.fog.near, preset.fog.far);
+
+    createSkyDome(preset);
 
     if (stage === 'OCEAN') {
-        scene.background = new THREE.Color(0x87CEEB);
-        scene.fog = new THREE.Fog(0x87CEEB, 200, 1000);
         createOcean();
-        createClouds(0xffffff, 50);
     } else if (stage === 'CITY') {
-        scene.background = new THREE.Color(0x050510);
-        scene.fog = new THREE.FogExp2(0x050510, 0.002);
         createCityGround();
         createBuildings();
     } else if (stage === 'WASTELAND') {
-        scene.background = new THREE.Color(0xcc9966);
-        scene.fog = new THREE.FogExp2(0xcc9966, 0.0025);
         createWasteland();
         createRocks();
     }
+
+    if(preset.cloudCount > 0) createClouds(preset);
+}
+
+function createSkyDome(preset) {
+    const uniforms = {
+        topColor: { value: new THREE.Color(preset.skyTop) },
+        horizonColor: { value: new THREE.Color(preset.horizon) },
+        bottomColor: { value: new THREE.Color(preset.skyBottom) },
+        sunDirection: { value: preset.sunDirection.clone().normalize() },
+        sunColor: { value: new THREE.Color(preset.sunColor) },
+        offset: { value: 0.4 },
+        exponent: { value: 1.5 }
+    };
+    const material = new THREE.ShaderMaterial({
+        uniforms: uniforms,
+        vertexShader: `
+            varying vec3 vWorldPosition;
+            void main() {
+                vec4 wp = modelMatrix * vec4(position, 1.0);
+                vWorldPosition = wp.xyz;
+                gl_Position = projectionMatrix * viewMatrix * wp;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vWorldPosition;
+            uniform vec3 topColor;
+            uniform vec3 horizonColor;
+            uniform vec3 bottomColor;
+            uniform vec3 sunDirection;
+            uniform vec3 sunColor;
+            uniform float offset;
+            uniform float exponent;
+            void main() {
+                vec3 dir = normalize(vWorldPosition + vec3(0.0, offset, 0.0));
+                float h = max(dir.y, 0.0);
+                float base = pow(h, exponent);
+                vec3 grad = mix(horizonColor, topColor, base);
+                float lowBlend = smoothstep(-0.1, 0.35, dir.y);
+                grad = mix(bottomColor, grad, lowBlend);
+                float sunAmount = max(dot(normalize(vWorldPosition), normalize(sunDirection)), 0.0);
+                vec3 sunGlow = sunColor * pow(sunAmount, 350.0);
+                gl_FragColor = vec4(grad + sunGlow, 1.0);
+            }
+        `,
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false
+    });
+    const geo = new THREE.SphereGeometry(4000, 32, 16);
+    skyDome = new THREE.Mesh(geo, material);
+    skyDome.frustumCulled = false;
+    scene.add(skyDome);
+}
+
+function createOceanMaterial() {
+    const uniforms = {
+        uTime: { value: 0 },
+        uLightDir: { value: currentSunDir.clone().normalize() },
+        uDeepColor: { value: new THREE.Color(0x0b3f6d) },
+        uShallowColor: { value: new THREE.Color(0x2c83c7) },
+        uFoamColor: { value: new THREE.Color(0xffffff) }
+    };
+    return new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `
+            varying vec3 vWorldPos;
+            varying vec3 vNormal;
+            varying float vHeight;
+            uniform float uTime;
+            float wave(vec2 dir, float freq, float amp, float speed, vec2 p) {
+                return sin(dot(dir, p) * freq + uTime * speed) * amp;
+            }
+            vec2 waveDeriv(vec2 dir, float freq, float amp, float speed, vec2 p) {
+                float k = freq;
+                float phase = dot(dir, p) * k + uTime * speed;
+                float d = cos(phase) * amp * k;
+                return dir * d;
+            }
+            void main() {
+                vec3 pos = position;
+                vec2 p = pos.xz;
+                float h1 = wave(normalize(vec2(1.0, 0.2)), 0.015, 2.8, 1.4, p);
+                float h2 = wave(normalize(vec2(-0.6, 1.0)), 0.018, 1.9, 1.8, p);
+                float h3 = wave(normalize(vec2(0.8, 0.4)), 0.032, 1.1, 2.2, p);
+                float height = h1 + h2 + h3;
+                pos.y += height;
+                vec2 d1 = waveDeriv(normalize(vec2(1.0, 0.2)), 0.015, 2.8, 1.4, p);
+                vec2 d2 = waveDeriv(normalize(vec2(-0.6, 1.0)), 0.018, 1.9, 1.8, p);
+                vec2 d3 = waveDeriv(normalize(vec2(0.8, 0.4)), 0.032, 1.1, 2.2, p);
+                vec2 grad = d1 + d2 + d3;
+                vec3 normal = normalize(vec3(-grad.x, 1.0, -grad.y));
+                vec4 wp = modelMatrix * vec4(pos, 1.0);
+                vWorldPos = wp.xyz;
+                vNormal = normal;
+                vHeight = height;
+                gl_Position = projectionMatrix * viewMatrix * wp;
+            }
+        `,
+        fragmentShader: `
+            precision mediump float;
+            varying vec3 vWorldPos;
+            varying vec3 vNormal;
+            varying float vHeight;
+            uniform vec3 uLightDir;
+            uniform vec3 uDeepColor;
+            uniform vec3 uShallowColor;
+            uniform vec3 uFoamColor;
+            void main() {
+                vec3 n = normalize(vNormal);
+                vec3 l = normalize(uLightDir);
+                vec3 v = normalize(cameraPosition - vWorldPos);
+                float diffuse = max(dot(n, l), 0.0);
+                float spec = pow(max(dot(reflect(-l, n), v), 0.0), 64.0);
+                float fresnel = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+                float depthBlend = smoothstep(-10.0, 6.0, vWorldPos.y);
+                vec3 base = mix(uDeepColor, uShallowColor, depthBlend);
+                float foam = smoothstep(1.8, 3.4, abs(vHeight)) * 0.6;
+                vec3 color = base * (0.45 + diffuse * 0.85) + spec * 0.6 + fresnel * 0.35;
+                color = mix(color, uFoamColor, foam);
+                gl_FragColor = vec4(color, 0.98);
+            }
+        `,
+        transparent: true,
+        fog: false
+    });
+}
+
+function generateAsphaltTexture() {
+    if(asphaltTexture) return asphaltTexture;
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0b0d12';
+    ctx.fillRect(0, 0, size, size);
+    for(let i=0; i<3000; i++) {
+        const x = Math.random()*size;
+        const y = Math.random()*size;
+        const s = Math.random()*2;
+        ctx.fillStyle = `rgba(255,255,255,${0.03 + Math.random()*0.05})`;
+        ctx.fillRect(x, y, s, s);
+    }
+    ctx.strokeStyle = 'rgba(0, 255, 170, 0.25)';
+    ctx.lineWidth = 2;
+    for(let i=0; i<size; i+=64) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0); ctx.lineTo(i, size); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i); ctx.lineTo(size, i); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.setLineDash([14, 18]);
+    ctx.lineWidth = 3;
+    for(let i=32; i<size; i+=128) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0); ctx.lineTo(i, size); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i); ctx.lineTo(size, i); ctx.stroke();
+    }
+    asphaltTexture = new THREE.CanvasTexture(canvas);
+    asphaltTexture.wrapS = asphaltTexture.wrapT = THREE.RepeatWrapping;
+    asphaltTexture.needsUpdate = true;
+    return asphaltTexture;
+}
+
+function hash2(x, z) {
+    const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+    return s - Math.floor(s);
+}
+function computeCanyonHeight(x, z) {
+    const f1 = Math.sin(x * 0.006) * 14 + Math.cos(z * 0.005) * 10;
+    const f2 = Math.sin((x + z) * 0.01) * 7;
+    const f3 = Math.sin(Math.sqrt(x*x + z*z) * 0.008) * 5;
+    const noise = (hash2(x, z) - 0.5) * 4.0;
+    return (f1 + f2 + f3) * 0.7 + noise - 4;
+}
+function sampleDesertColor(height) {
+    const h = THREE.MathUtils.clamp((height + 25) / 50, 0, 1);
+    const c = new THREE.Color();
+    c.setHSL(0.083, 0.6 - h*0.1, 0.5 + h*0.1);
+    return c;
+}
+function generateWastelandTexture() {
+    if(wastelandTexture) return wastelandTexture;
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const grd = ctx.createLinearGradient(0, 0, size, size);
+    grd.addColorStop(0, '#d6b07a');
+    grd.addColorStop(1, '#b27a3c');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = 'rgba(80, 50, 30, 0.22)';
+    for(let i=0; i<2200; i++) {
+        const x = Math.random()*size;
+        const y = Math.random()*size;
+        const s = 1 + Math.random()*4;
+        ctx.beginPath(); ctx.ellipse(x, y, s*1.4, s, Math.random()*Math.PI, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<50; i++) {
+        ctx.beginPath();
+        ctx.moveTo(Math.random()*size, Math.random()*size);
+        ctx.lineTo(Math.random()*size, Math.random()*size);
+        ctx.stroke();
+    }
+    wastelandTexture = new THREE.CanvasTexture(canvas);
+    wastelandTexture.wrapS = wastelandTexture.wrapT = THREE.RepeatWrapping;
+    wastelandTexture.needsUpdate = true;
+    return wastelandTexture;
 }
 
 function createOcean() {
-    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 40, 40);
+    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 180, 180);
     geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshPhongMaterial({ color: 0x0044aa, shininess: 80, flatShading: true, transparent: true, opacity: 0.9 });
-    environmentMesh = new THREE.Mesh(geo, mat);
-    environmentMesh.position.y = -10;
+    oceanMaterial = oceanMaterial || createOceanMaterial();
+    environmentMesh = new THREE.Mesh(geo, oceanMaterial);
+    environmentMesh.position.y = -12;
+    environmentMesh.frustumCulled = false;
     scene.add(environmentMesh);
 }
 function createCityGround() {
-    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 20, 20);
+    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 40, 40);
     geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
+    const tex = generateAsphaltTexture();
+    tex.repeat.set(CONFIG.seaSize / 500, CONFIG.seaSize / 500);
+    const mat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: tex,
+        emissive: 0x0a101e,
+        emissiveMap: tex,
+        metalness: 0.08,
+        roughness: 0.55
+    });
     environmentMesh = new THREE.Mesh(geo, mat);
     environmentMesh.position.y = -2;
+    environmentMesh.receiveShadow = true;
     scene.add(environmentMesh);
-    const grid = new THREE.GridHelper(CONFIG.seaSize, 40, 0x00ffcc, 0x222222);
+    const grid = new THREE.GridHelper(CONFIG.seaSize, 80, 0x00ffaa, 0x151515);
+    grid.material.opacity = 0.18;
+    grid.material.transparent = true;
     grid.position.y = -1;
     scene.add(grid);
 }
 function createWasteland() {
-    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 50, 50);
+    const geo = new THREE.PlaneGeometry(CONFIG.seaSize, CONFIG.seaSize, 120, 120);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
+    const colors = [];
     for(let i=0; i<pos.count; i++) {
         const x = pos.getX(i); const z = pos.getZ(i);
-        pos.setY(i, Math.sin(x/50)*Math.cos(z/50)*10 + Math.random()*2);
+        const height = computeCanyonHeight(x, z);
+        pos.setY(i, height);
+        const c = sampleDesertColor(height);
+        colors.push(c.r, c.g, c.b);
     }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 1.0, flatShading: true });
+    const tex = generateWastelandTexture();
+    tex.repeat.set(CONFIG.seaSize / 800, CONFIG.seaSize / 800);
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, roughness: 0.95, metalness: 0.02 });
     environmentMesh = new THREE.Mesh(geo, mat);
-    environmentMesh.position.y = -20;
+    environmentMesh.position.y = -18;
+    environmentMesh.receiveShadow = true;
     scene.add(environmentMesh);
 }
-function createClouds(color, count) {
-    const geo = new THREE.DodecahedronGeometry(12, 0);
-    const mat = new THREE.MeshStandardMaterial({ color: color, transparent: true, opacity: 0.5, flatShading: true });
-    for(let i=0; i<count; i++) {
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set((Math.random()-0.5)*1500, 50+(Math.random()*100), (Math.random()-0.5)*1500);
-        m.scale.set(1+Math.random()*2, 0.5+Math.random(), 1+Math.random()*2);
-        scene.add(m);
+function generateCloudTexture() {
+    if(cloudTexture) return cloudTexture;
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, size, size);
+    for(let i=0; i<7; i++) {
+        const x = (0.2 + Math.random()*0.6) * size;
+        const y = (0.2 + Math.random()*0.6) * size;
+        const r = size * (0.14 + Math.random()*0.12);
+        const g = ctx.createRadialGradient(x, y, r*0.35, x, y, r);
+        g.addColorStop(0, 'rgba(255,255,255,0.9)');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.globalAlpha = 0.75;
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r*2, r*2);
+    }
+    cloudTexture = new THREE.CanvasTexture(canvas);
+    cloudTexture.wrapS = cloudTexture.wrapT = THREE.ClampToEdgeWrapping;
+    cloudTexture.needsUpdate = true;
+    return cloudTexture;
+}
+function createClouds(preset) {
+    const tex = generateCloudTexture();
+    const [minSize, maxSize] = preset.cloudSize || [160, 260];
+    cloudWind = preset.cloudWind || { x: 0, z: 0 };
+    for(let i=0; i<preset.cloudCount; i++) {
+        const size = minSize + Math.random() * (maxSize - minSize);
+        const cloud = new THREE.Mesh(
+            new THREE.PlaneGeometry(size, size * 0.55),
+            new THREE.MeshLambertMaterial({
+                map: tex,
+                color: new THREE.Color(preset.cloudTint || 0xffffff),
+                transparent: true,
+                opacity: preset.cloudOpacity ?? 0.55,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            })
+        );
+        cloud.position.set((Math.random()-0.5)*1500, (preset.cloudHeight || 180) + Math.random()*40, (Math.random()-0.5)*1500);
+        cloud.rotation.x = -Math.PI/2;
+        cloud.rotation.z = Math.random() * Math.PI * 2;
+        scene.add(cloud);
+        cloudLayers.push({ mesh: cloud, speed: 0.6 + Math.random() * 0.8 });
     }
 }
 function createBuildings() {
@@ -1050,11 +1376,27 @@ function animate() {
         const dz = player.mesh.position.z - environmentMesh.position.z;
         if(Math.abs(dx) > 100) environmentMesh.position.x += dx;
         if(Math.abs(dz) > 100) environmentMesh.position.z += dz;
-        if(currentStage === 'OCEAN') {
-            const pos = environmentMesh.geometry.attributes.position;
-            const t = Date.now() * 0.001;
-            for(let i=0; i<pos.count; i+=3) pos.setY(i, Math.sin(t+i)*2);
-            pos.needsUpdate = true;
+        if(environmentMesh.material && environmentMesh.material.uniforms?.uTime) {
+            environmentMesh.material.uniforms.uTime.value = nowFrame * 0.001;
+            environmentMesh.material.uniforms.uLightDir.value.copy(currentSunDir);
+        }
+    }
+    if(skyDome && player) skyDome.position.copy(player.mesh.position);
+    if(cloudLayers.length) {
+        const px = player.mesh.position.x;
+        const pz = player.mesh.position.z;
+        const windX = (cloudWind?.x || 0) * dt;
+        const windZ = (cloudWind?.z || 0) * dt;
+        for(let i=0; i<cloudLayers.length; i++) {
+            const c = cloudLayers[i];
+            c.mesh.position.x += windX * (1 + c.speed);
+            c.mesh.position.z += windZ * (1 + c.speed);
+            const dx = c.mesh.position.x - px;
+            const dz = c.mesh.position.z - pz;
+            if((dx*dx + dz*dz) > 1400*1400) {
+                c.mesh.position.x = px + (Math.random()-0.5)*900;
+                c.mesh.position.z = pz + (Math.random()-0.5)*900;
+            }
         }
     }
 
