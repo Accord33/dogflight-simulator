@@ -12,6 +12,9 @@ const CONFIG = {
     maxPitch: Math.PI / 4,
     altitudeMin: 5,
     altitudeMax: 400,
+    rollSpeed: 0.03,
+    rollDamping: 0.015,
+    maxRoll: Math.PI * 0.9,
     bankTurnInfluence: 0.06,
     aimAssistMaxAngle: Math.PI / 18, // ~10 degrees
     aimAssistMaxDistance: 280,
@@ -41,7 +44,7 @@ let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
 const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
 const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
-let keys = { w: false, s: false, a: false, d: false, arrowup: false, arrowdown: false, space: false, turbo: false, brake: false };
+let keys = { w: false, s: false, a: false, d: false, q: false, e: false, arrowup: false, arrowdown: false, space: false, turbo: false, brake: false };
 let debugLog = false;
 let debugState = { pitchInput: 0, turn: 0 };
 let mouse = { x: 0, y: 0, isDown: false };
@@ -1154,6 +1157,7 @@ function animate() {
     player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
+    const rollInput = (keys.e ? 1 : 0) + (keys.q ? -1 : 0);
     const pitchInput = (keys.w || keys.arrowup ? 1 : 0) + (keys.s || keys.arrowdown ? -1 : 0);
     debugState.pitchInput = pitchInput;
     debugState.turn = turn;
@@ -1164,9 +1168,9 @@ function animate() {
     );
     const bankTurn = player.mesh.rotation.z * CONFIG.bankTurnInfluence * (dt * 60);
     player.mesh.rotation.y += turn * CONFIG.turnSpeed + bankTurn;
-    const rollTarget = turn * 0.6;
-    const rollBlend = turn === 0 ? 0.2 : 0.1; // level faster when not turning
-    player.mesh.rotation.z += (rollTarget - player.mesh.rotation.z) * rollBlend;
+    player.mesh.rotation.z += rollInput * CONFIG.rollSpeed * (dt * 60);
+    player.mesh.rotation.z -= player.mesh.rotation.z * CONFIG.rollDamping * (dt * 60);
+    player.mesh.rotation.z = THREE.MathUtils.clamp(player.mesh.rotation.z, -CONFIG.maxRoll, CONFIG.maxRoll);
 
     // Move directionはピッチ＋ヨーのみで計算し、ロールによる上下左右の回り込みを抑える
     const motionQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.mesh.rotation.x, player.mesh.rotation.y, 0, 'XYZ'));
