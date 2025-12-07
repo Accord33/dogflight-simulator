@@ -17,9 +17,9 @@ const CONFIG = {
     enemyStrafeSpeed: 0.65,
     enemyEvadeSpeed: 0.9,
     enemyTurnLerp: 0.15,
-    enemyApproachDistance: 1300,
-    enemyHoldDistance: 650,
-    enemyEvadeDistance: 450,
+    enemyApproachDistance: 420,
+    enemyHoldDistance: 320,
+    enemyEvadeDistance: 260,
     enemyWaveMaxSizeIncrease: 3,
     enemyWaveMinDistance: 500,
     enemyWaveDistanceRange: 400,
@@ -1473,7 +1473,8 @@ function animate() {
                     desiredDir = escapeDir;
                     desiredSpeed = CONFIG.enemyEvadeSpeed * 1.05;
                     turnLerp = 0.2;
-                    if(dist > CONFIG.enemyApproachDistance + 250) {
+                    const regroupTrigger = Math.min(CONFIG.enemyApproachDistance + 120, 500);
+                    if(dist > regroupTrigger) {
                         e.state = ENEMY_STATES.REGROUP;
                         e.stateTimer = 0;
                     }
@@ -1486,7 +1487,8 @@ function animate() {
                     if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
                     desiredSpeed = CONFIG.enemyStrafeSpeed;
                     turnLerp = 0.14;
-                    if(reformTarget.distanceTo(e.mesh.position) < 60 || dist > CONFIG.enemyApproachDistance + 150) {
+                    const regroupRange = Math.min(CONFIG.enemyApproachDistance + 80, 480);
+                    if(reformTarget.distanceTo(e.mesh.position) < 60 || dist <= regroupRange) {
                         e.state = ENEMY_STATES.INGRESS;
                         e.stateTimer = 0;
                     }
