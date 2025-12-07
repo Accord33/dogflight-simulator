@@ -1140,7 +1140,9 @@ function animate() {
         CONFIG.maxPitch
     );
     player.mesh.rotation.y += turn * CONFIG.turnSpeed;
-    player.mesh.rotation.z += (turn * 0.6 - player.mesh.rotation.z) * 0.1;
+    const rollTarget = turn * 0.6;
+    const rollBlend = turn === 0 ? 0.2 : 0.1; // level faster when not turning
+    player.mesh.rotation.z += (rollTarget - player.mesh.rotation.z) * rollBlend;
 
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(player.mesh.quaternion).multiplyScalar(player.speed);
     player.mesh.position.add(forwardDir);
@@ -1153,10 +1155,15 @@ function animate() {
     updateSpeedDisplay();
     updateTurboDisplay();
 
+    // Follow full aircraft orientation so the camera banks with the plane
+    const camQuat = player.mesh.quaternion.clone();
     const baseCamOffset = new THREE.Vector3(0, 4.5, 15);
-    const camOff = baseCamOffset.clone().applyQuaternion(player.mesh.quaternion);
-    const lookTarget = player.mesh.position.clone().add(new THREE.Vector3(0, 0, -20).applyQuaternion(player.mesh.quaternion));
-    camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
+    const camOff = baseCamOffset.clone().applyQuaternion(camQuat);
+    const camPosTarget = player.mesh.position.clone().add(camOff);
+    const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camQuat);
+    const lookTarget = camPosTarget.clone().add(camForward.multiplyScalar(50));
+    camera.position.lerp(camPosTarget, 0.1);
+    camera.up.copy(new THREE.Vector3(0, 1, 0).applyQuaternion(camQuat));
     camera.lookAt(lookTarget);
 
     // Env
