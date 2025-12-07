@@ -1,5 +1,10 @@
 const CONFIG = {
     playerSpeedMin: 0.3, playerSpeedMax: 1.2,
+    cruiseSpeed: 1.0,
+    speedResponse: 0.08,
+    turboMultiplier: 1.7,
+    playerFlameColor: 0x00ffff,
+    turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
     bulletSpeed: 6.0, 
     missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
@@ -24,7 +29,7 @@ const NET_DEFAULT_URL = 'ws://localhost:3001';
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
-let keys = { w: false, s: false, a: false, d: false, space: false };
+let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
 
@@ -66,7 +71,8 @@ const ui = {
     netBadge: document.getElementById('net-badge'),
     lives: document.getElementById('lives-val'),
     livesPanel: document.getElementById('lives-panel'),
-    waitingText: document.getElementById('waiting-text')
+    waitingText: document.getElementById('waiting-text'),
+    speed: document.getElementById('speed-val')
 };
 const screens = {
     title: document.getElementById('title-screen'),
@@ -579,10 +585,11 @@ function createPlayer(options = {}) {
     
     let flame = null;
     if(!options.disableFlame) {
-        flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color: options.flameColor || 0x00ffff, transparent:true, opacity:0.8}));
+        const flameColor = options.flameColor || CONFIG.playerFlameColor;
+        flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3, 8), new THREE.MeshBasicMaterial({color: flameColor, transparent:true, opacity:0.8}));
         flame.rotateX(-Math.PI/2); flame.position.z = 4; group.add(flame);
     }
-    return { mesh: group, speed: CONFIG.playerSpeedMin, flame: flame };
+    return { mesh: group, speed: CONFIG.cruiseSpeed, flame: flame };
 }
 
 function createEnemy() {
@@ -950,6 +957,13 @@ function updateUI() {
             if(ui.livesPanel) ui.livesPanel.style.display = 'none';
         }
     }
+    updateSpeedDisplay();
+}
+
+function updateSpeedDisplay() {
+    if(!ui.speed) return;
+    const currentSpeed = player && player.speed ? player.speed : CONFIG.cruiseSpeed;
+    ui.speed.innerText = currentSpeed.toFixed(2);
 }
 function saveScore(s) {
     let sc = JSON.parse(localStorage.getItem(scoreListKey)||'[]'); sc.push(s);
@@ -967,6 +981,7 @@ function updateHighScoreDisplay() {
 }
 function onKey(e, down) {
     const k = e.key.toLowerCase();
+    if(k === 'shift') { keys.turbo = down; return; }
     if(keys[k] !== undefined) keys[k] = down;
     if(k === ' ' && down) fireMissile(player, false);
 }
@@ -1027,9 +1042,12 @@ function animate() {
     }
 
     // Player Move
-    if(keys.w) player.speed = Math.min(player.speed+0.05, CONFIG.playerSpeedMax);
-    else if(keys.s) player.speed = Math.max(player.speed-0.05, CONFIG.playerSpeedMin);
-    else player.speed += (1.0 - player.speed) * 0.01;
+    const targetSpeed = keys.turbo
+        ? CONFIG.playerSpeedMax * CONFIG.turboMultiplier
+        : (keys.s ? CONFIG.playerSpeedMin : CONFIG.cruiseSpeed);
+    player.speed += (targetSpeed - player.speed) * CONFIG.speedResponse;
+    const maxSpeed = CONFIG.playerSpeedMax * CONFIG.turboMultiplier;
+    player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, maxSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
     player.mesh.rotation.y += turn * CONFIG.turnSpeed;
@@ -1038,7 +1056,12 @@ function animate() {
 
     const fwd = new THREE.Vector3(0,0,-player.speed).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     player.mesh.position.add(fwd);
-    player.flame.scale.z = player.speed * 2;
+    if(player.flame) {
+        player.flame.scale.z = player.speed * 2;
+        const flameTarget = keys.turbo ? CONFIG.turboFlameColor : CONFIG.playerFlameColor;
+        player.flame.material.color.lerp(new THREE.Color(flameTarget), 0.2);
+    }
+    updateSpeedDisplay();
 
     const camOff = new THREE.Vector3(0, 5, 15).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
