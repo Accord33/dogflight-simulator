@@ -4,7 +4,7 @@ const CONFIG = {
     speedResponse: 0.08,
     turboMultiplier: 1.7,
     turboChargeRate: 0.22, // per second
-    turboDrainRate: 0.7, // per second while turbo is active
+    turboDrainRate: 0.22, // per second while turbo is active
     playerFlameColor: 0x00ffff,
     turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
