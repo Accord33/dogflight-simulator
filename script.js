@@ -1267,6 +1267,9 @@ function animate() {
             const formationTarget = (!e.isLeader && leader)
                 ? leader.mesh.position.clone().add((e.formationOffset || new THREE.Vector3()).clone().applyQuaternion(leader.mesh.quaternion))
                 : leader.mesh.position.clone();
+            const offsetAttackPoint = (!e.isLeader && leader)
+                ? player.mesh.position.clone().add((e.formationOffset || new THREE.Vector3()).clone().applyQuaternion(leader.mesh.quaternion))
+                : player.mesh.position.clone();
 
             let desiredDir = toP.clone().normalize();
             let desiredSpeed = CONFIG.enemySpeed;
@@ -1284,7 +1287,9 @@ function animate() {
                     break;
                 }
                 case ENEMY_STATES.APPROACH: {
-                    desiredDir = toP.clone().normalize();
+                    const target = e.isLeader ? player.mesh.position : formationTarget;
+                    desiredDir = target.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
                     desiredSpeed = CONFIG.enemyApproachSpeed;
                     if(dist < 900 || e.stateTimer > 3.5) {
                         e.state = ENEMY_STATES.ATTACK_RUN;
@@ -1293,7 +1298,8 @@ function animate() {
                     break;
                 }
                 case ENEMY_STATES.ATTACK_RUN: {
-                    desiredDir = toP.clone().normalize();
+                    desiredDir = offsetAttackPoint.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
                     desiredSpeed = CONFIG.enemyEvadeSpeed;
                     if(dist < 150 || e.stateTimer > 3) {
                         e.state = ENEMY_STATES.EXTEND;
