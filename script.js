@@ -24,6 +24,15 @@ const CONFIG = {
     fireRate: 80 // ms between shots
 };
 
+const ENEMY_STATES = {
+    FORM_UP: 'FORM_UP',
+    APPROACH: 'APPROACH',
+    ATTACK_RUN: 'ATTACK_RUN',
+    EXTEND: 'EXTEND',
+    REFORM: 'REFORM'
+};
+const TARGET_ENEMY_COUNT = 8;
+
 const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
 const NET_DEFAULT_URL = 'ws://localhost:3001';
 
@@ -36,6 +45,7 @@ const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
 let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
+let enemyWaveId = 0;
 
 let isPlaying = false;
 let currentStage = 'OCEAN';
@@ -218,7 +228,7 @@ function startGame(stage, opts = {}) {
     ui.gameOverMsg.style.display = 'none';
 
     if(gameMode !== GAME_MODES.ONLINE_VS && (gameMode !== GAME_MODES.ONLINE_COOP || isNetHost)) {
-        for(let i=0; i<8; i++) spawnEnemy();
+        replenishEnemies(TARGET_ENEMY_COUNT);
     }
     
     animate();
@@ -396,7 +406,7 @@ class NetClient {
             case 'host-grant':
                 isNetHost = true;
                 if(gameMode === GAME_MODES.ONLINE_COOP && enemies.length === 0) {
-                    for(let i=0; i<10; i++) spawnEnemy();
+                    replenishEnemies(TARGET_ENEMY_COUNT);
                 }
                 break;
             case 'matching':
@@ -817,16 +827,53 @@ function syncEnemiesFromSnapshot(snapshot) {
     pendingEnemySnapshot = null;
 }
 
-function spawnEnemy() {
-    const e = createEnemy();
-    e.id = ++enemyIdCounter;
-    e.hp = 1;
+function replenishEnemies(target = TARGET_ENEMY_COUNT) {
+    const missing = Math.max(0, target - enemies.length);
+    if(missing > 0) spawnEnemyWave(missing);
+}
+
+function spawnEnemyWave(count = 3) {
+    if(!player || !player.mesh) return;
+    const waveId = ++enemyWaveId;
     const angle = Math.random() * Math.PI * 2;
     const dist = 400 + Math.random() * 300;
-    e.mesh.position.set(player.mesh.position.x + Math.cos(angle)*dist, 50, player.mesh.position.z + Math.sin(angle)*dist);
-    scene.add(e.mesh);
-    enemies.push(e);
-    attachEnemyMarker(e);
+    const center = new THREE.Vector3(
+        player.mesh.position.x + Math.cos(angle) * dist,
+        DEFAULT_SPAWN_HEIGHT,
+        player.mesh.position.z + Math.sin(angle) * dist
+    );
+    const heading = new THREE.Vector3().subVectors(player.mesh.position, center).normalize();
+    const facing = heading.lengthSq() > 0 ? heading : new THREE.Vector3(0, 0, -1);
+    const baseQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), facing);
+    const formationOffsets = [
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(-25, 0, -25),
+        new THREE.Vector3(25, 0, -25),
+        new THREE.Vector3(-45, 0, -45),
+        new THREE.Vector3(45, 0, -45),
+        new THREE.Vector3(-65, 0, -65),
+        new THREE.Vector3(65, 0, -65),
+        new THREE.Vector3(0, 0, -65)
+    ];
+
+    for(let i=0; i<count; i++) {
+        const e = createEnemy();
+        e.id = ++enemyIdCounter;
+        e.hp = 1;
+        e.waveId = waveId;
+        e.isLeader = i === 0;
+        e.formationOffset = formationOffsets[i] || new THREE.Vector3((Math.random() - 0.5) * 60, 0, -40 - (i * 10));
+        e.waveReformPoint = center.clone();
+        e.state = ENEMY_STATES.FORM_UP;
+        e.stateTimer = 0;
+        e.velocity = new THREE.Vector3();
+        const spawnPos = center.clone().add(e.formationOffset.clone().applyQuaternion(baseQuat));
+        e.mesh.position.copy(spawnPos);
+        e.mesh.quaternion.copy(baseQuat);
+        scene.add(e.mesh);
+        enemies.push(e);
+        attachEnemyMarker(e);
+    }
 }
 
 function attachEnemyMarker(enemy) {
@@ -1184,7 +1231,7 @@ function animate() {
                             hit = true; createExplosion(enemies[j].mesh.position, 3);
                             if(enemies[j].marker) enemies[j].marker.remove();
                             scene.remove(enemies[j].mesh); enemies.splice(j, 1);
-                            score += 100; setTimeout(spawnEnemy, 2000);
+                            score += 100; setTimeout(() => replenishEnemies(TARGET_ENEMY_COUNT), 2000);
                         }
                     }
                 }
@@ -1204,40 +1251,78 @@ function animate() {
 
         if(runEnemies) {
             if(dist > 2500) {
-                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); spawnEnemy(); continue;
+                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); replenishEnemies(TARGET_ENEMY_COUNT); continue;
             }
 
             e.stateTimer = (e.stateTimer || 0) + dt;
-            const prevState = e.state || 'approach';
-            if(dist > CONFIG.enemyApproachDistance) e.state = 'approach';
-            else if(dist < CONFIG.enemyEvadeDistance) e.state = 'evade';
-            else e.state = 'strafe';
-            if(e.state !== prevState) {
+            if(!e.state) {
+                e.state = ENEMY_STATES.FORM_UP;
                 e.stateTimer = 0;
-                e.strafeDir = Math.random() < 0.5 ? -1 : 1;
             }
 
-            const flatDir = toP.clone(); flatDir.y = 0;
-            const baseDir = flatDir.lengthSq() > 0.0001 ? flatDir.normalize() : new THREE.Vector3(0,0,1);
-            const up = new THREE.Vector3(0,1,0);
-            let desiredDir = baseDir.clone();
+            const leader = e.isLeader
+                ? e
+                : enemies.find(en => en.waveId === e.waveId && en.isLeader) || enemies.find(en => en.waveId === e.waveId) || e;
+            const leaderForward = new THREE.Vector3(0,0,-1).applyQuaternion(leader.mesh.quaternion);
+            const formationTarget = (!e.isLeader && leader)
+                ? leader.mesh.position.clone().add((e.formationOffset || new THREE.Vector3()).clone().applyQuaternion(leader.mesh.quaternion))
+                : leader.mesh.position.clone();
+
+            let desiredDir = toP.clone().normalize();
             let desiredSpeed = CONFIG.enemySpeed;
 
-            if(e.state === 'approach') {
-                desiredSpeed = CONFIG.enemyApproachSpeed;
-            } else if(e.state === 'strafe') {
-                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(0.7 * (e.strafeDir || 1));
-                const rangeError = dist - CONFIG.enemyHoldDistance;
-                desiredDir.add(side);
-                desiredDir.add(baseDir.clone().multiplyScalar(rangeError > 0 ? 0.35 : -0.35));
-                desiredDir.normalize();
-                desiredSpeed = CONFIG.enemyStrafeSpeed;
-                if(e.stateTimer > 2.5) { e.strafeDir *= -1; e.stateTimer = 0; }
-            } else {
-                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(1.0 * (e.strafeDir || 1));
-                desiredDir = baseDir.clone().multiplyScalar(0.3).add(side).normalize();
-                desiredSpeed = CONFIG.enemyEvadeSpeed;
-                if(e.stateTimer > 1.5 && dist > CONFIG.enemyHoldDistance) e.state = 'approach';
+            switch(e.state) {
+                case ENEMY_STATES.FORM_UP: {
+                    const target = formationTarget || e.mesh.position.clone();
+                    desiredDir = target.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemySpeed;
+                    if(target.distanceTo(e.mesh.position) < 20 || e.stateTimer > 4) {
+                        e.state = ENEMY_STATES.APPROACH;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.APPROACH: {
+                    desiredDir = toP.clone().normalize();
+                    desiredSpeed = CONFIG.enemyApproachSpeed;
+                    if(dist < 900 || e.stateTimer > 3.5) {
+                        e.state = ENEMY_STATES.ATTACK_RUN;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.ATTACK_RUN: {
+                    desiredDir = toP.clone().normalize();
+                    desiredSpeed = CONFIG.enemyEvadeSpeed;
+                    if(dist < 150 || e.stateTimer > 3) {
+                        e.state = ENEMY_STATES.EXTEND;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.EXTEND: {
+                    desiredDir = new THREE.Vector3().subVectors(e.mesh.position, player.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyEvadeSpeed;
+                    if(dist > CONFIG.enemyApproachDistance) {
+                        e.state = ENEMY_STATES.REFORM;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.REFORM:
+                default: {
+                    const reformTarget = formationTarget || e.waveReformPoint || leader.mesh.position.clone();
+                    desiredDir = reformTarget.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyStrafeSpeed;
+                    if(reformTarget.distanceTo(e.mesh.position) < 60 || e.stateTimer > 5) {
+                        e.state = ENEMY_STATES.APPROACH;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
             }
 
             // Light separation so enemies don't stack too close
@@ -1263,7 +1348,7 @@ function animate() {
             const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), moveDir);
             e.mesh.quaternion.slerp(targetQuat, CONFIG.enemyTurnLerp);
 
-            if(dist < 800) {
+            if(e.state === ENEMY_STATES.ATTACK_RUN && dist < 800) {
                  if(nowFrame - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = nowFrame; }
                  if(Math.random() < 0.005 && dist > 100) fireMissile(e, true);
             }
