@@ -42,6 +42,15 @@ const CONFIG = {
     fireRate: 80 // ms between shots
 };
 
+const ENEMY_STATES = {
+    FORM_UP: 'FORM_UP',
+    APPROACH: 'APPROACH',
+    ATTACK_RUN: 'ATTACK_RUN',
+    EXTEND: 'EXTEND',
+    REFORM: 'REFORM'
+};
+const TARGET_ENEMY_COUNT = 8;
+
 const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
 const NET_DEFAULT_URL = 'ws://localhost:3001';
 const FORMATION_TYPES = {
@@ -67,6 +76,7 @@ const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
 let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
+let enemyWaveId = 0;
 
 let isPlaying = false;
 let currentStage = 'OCEAN';
@@ -1396,36 +1406,80 @@ function animate() {
             }
 
             e.stateTimer = (e.stateTimer || 0) + dt;
-            const prevState = e.state || 'approach';
-            if(dist > CONFIG.enemyApproachDistance) e.state = 'approach';
-            else if(dist < CONFIG.enemyEvadeDistance) e.state = 'evade';
-            else e.state = 'strafe';
-            if(e.state !== prevState) {
+            if(!e.state) {
+                e.state = ENEMY_STATES.FORM_UP;
                 e.stateTimer = 0;
-                e.strafeDir = Math.random() < 0.5 ? -1 : 1;
             }
 
-            const flatDir = toP.clone(); flatDir.y = 0;
-            const baseDir = flatDir.lengthSq() > 0.0001 ? flatDir.normalize() : new THREE.Vector3(0,0,1);
-            const up = new THREE.Vector3(0,1,0);
-            let desiredDir = baseDir.clone();
+            const leader = e.isLeader
+                ? e
+                : enemies.find(en => en.waveId === e.waveId && en.isLeader) || enemies.find(en => en.waveId === e.waveId) || e;
+            const leaderForward = new THREE.Vector3(0,0,-1).applyQuaternion(leader.mesh.quaternion);
+            const formationTarget = (!e.isLeader && leader)
+                ? leader.mesh.position.clone().add((e.formationOffset || new THREE.Vector3()).clone().applyQuaternion(leader.mesh.quaternion))
+                : leader.mesh.position.clone();
+            const offsetAttackPoint = (!e.isLeader && leader)
+                ? player.mesh.position.clone().add((e.formationOffset || new THREE.Vector3()).clone().applyQuaternion(leader.mesh.quaternion))
+                : player.mesh.position.clone();
+
+            let desiredDir = toP.clone().normalize();
             let desiredSpeed = CONFIG.enemySpeed;
 
-            if(e.state === 'approach') {
-                desiredSpeed = CONFIG.enemyApproachSpeed;
-            } else if(e.state === 'strafe') {
-                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(0.7 * (e.strafeDir || 1));
-                const rangeError = dist - CONFIG.enemyHoldDistance;
-                desiredDir.add(side);
-                desiredDir.add(baseDir.clone().multiplyScalar(rangeError > 0 ? 0.35 : -0.35));
-                desiredDir.normalize();
-                desiredSpeed = CONFIG.enemyStrafeSpeed;
-                if(e.stateTimer > 2.5) { e.strafeDir *= -1; e.stateTimer = 0; }
-            } else {
-                const side = new THREE.Vector3().crossVectors(baseDir, up).normalize().multiplyScalar(1.0 * (e.strafeDir || 1));
-                desiredDir = baseDir.clone().multiplyScalar(0.3).add(side).normalize();
-                desiredSpeed = CONFIG.enemyEvadeSpeed;
-                if(e.stateTimer > 1.5 && dist > CONFIG.enemyHoldDistance) e.state = 'approach';
+            switch(e.state) {
+                case ENEMY_STATES.FORM_UP: {
+                    const target = formationTarget || e.mesh.position.clone();
+                    desiredDir = target.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemySpeed;
+                    if(target.distanceTo(e.mesh.position) < 20 || e.stateTimer > 4) {
+                        e.state = ENEMY_STATES.APPROACH;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.APPROACH: {
+                    const target = e.isLeader ? player.mesh.position : formationTarget;
+                    desiredDir = target.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyApproachSpeed;
+                    if(dist < 900 || e.stateTimer > 3.5) {
+                        e.state = ENEMY_STATES.ATTACK_RUN;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.ATTACK_RUN: {
+                    desiredDir = offsetAttackPoint.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyEvadeSpeed;
+                    if(dist < 150 || e.stateTimer > 3) {
+                        e.state = ENEMY_STATES.EXTEND;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.EXTEND: {
+                    desiredDir = new THREE.Vector3().subVectors(e.mesh.position, player.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyEvadeSpeed;
+                    if(dist > CONFIG.enemyApproachDistance) {
+                        e.state = ENEMY_STATES.REFORM;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
+                case ENEMY_STATES.REFORM:
+                default: {
+                    const reformTarget = formationTarget || e.waveReformPoint || leader.mesh.position.clone();
+                    desiredDir = reformTarget.clone().sub(e.mesh.position);
+                    if(desiredDir.lengthSq() > 0.0001) desiredDir.normalize(); else desiredDir.copy(leaderForward);
+                    desiredSpeed = CONFIG.enemyStrafeSpeed;
+                    if(reformTarget.distanceTo(e.mesh.position) < 60 || e.stateTimer > 5) {
+                        e.state = ENEMY_STATES.APPROACH;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                }
             }
 
             // Light separation so enemies don't stack too close
