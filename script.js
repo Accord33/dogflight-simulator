@@ -12,6 +12,7 @@ const CONFIG = {
     maxPitch: Math.PI / 4,
     altitudeMin: 5,
     altitudeMax: 400,
+    bankTurnInfluence: 0.06,
     aimAssistMaxAngle: Math.PI / 18, // ~10 degrees
     aimAssistMaxDistance: 280,
     aimAssistMaxBlend: 0.55,
@@ -1161,12 +1162,15 @@ function animate() {
         -CONFIG.maxPitch,
         CONFIG.maxPitch
     );
-    player.mesh.rotation.y += turn * CONFIG.turnSpeed;
+    const bankTurn = player.mesh.rotation.z * CONFIG.bankTurnInfluence * (dt * 60);
+    player.mesh.rotation.y += turn * CONFIG.turnSpeed + bankTurn;
     const rollTarget = turn * 0.6;
     const rollBlend = turn === 0 ? 0.2 : 0.1; // level faster when not turning
     player.mesh.rotation.z += (rollTarget - player.mesh.rotation.z) * rollBlend;
 
-    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(player.mesh.quaternion).multiplyScalar(player.speed);
+    // Move directionはピッチ＋ヨーのみで計算し、ロールによる上下左右の回り込みを抑える
+    const motionQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.mesh.rotation.x, player.mesh.rotation.y, 0, 'XYZ'));
+    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(motionQuat).multiplyScalar(player.speed);
     player.mesh.position.add(forwardDir);
     player.mesh.position.y = THREE.MathUtils.clamp(player.mesh.position.y, CONFIG.altitudeMin, CONFIG.altitudeMax);
     if(player.flame) {
