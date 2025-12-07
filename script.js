@@ -8,6 +8,10 @@ const CONFIG = {
     playerFlameColor: 0x00ffff,
     turboFlameColor: 0xffb347,
     turnSpeed: 0.015,
+    pitchSpeed: 0.012,
+    maxPitch: Math.PI / 4,
+    altitudeMin: 5,
+    altitudeMax: 400,
     bulletSpeed: 6.0, 
     missileSpeedMultiplier: 1.3, // Missiles move at ~1.3x the player's current speed
     missileCapacity: 20,
@@ -33,7 +37,7 @@ let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
 const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
 const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
-let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
+let keys = { w: false, s: false, a: false, d: false, arrowup: false, arrowdown: false, space: false, turbo: false };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
 
@@ -1084,12 +1088,18 @@ function animate() {
     player.speed = Math.max(CONFIG.playerSpeedMin, Math.min(player.speed, turboSpeed));
     
     const turn = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
+    const pitchInput = (keys.s || keys.arrowup ? 1 : 0) + (keys.w || keys.arrowdown ? -1 : 0);
+    player.mesh.rotation.x = THREE.MathUtils.clamp(
+        player.mesh.rotation.x + pitchInput * CONFIG.pitchSpeed * (dt * 60),
+        -CONFIG.maxPitch,
+        CONFIG.maxPitch
+    );
     player.mesh.rotation.y += turn * CONFIG.turnSpeed;
     player.mesh.rotation.z += (turn * 0.6 - player.mesh.rotation.z) * 0.1;
-    player.mesh.rotation.x = 0;
 
-    const fwd = new THREE.Vector3(0,0,-player.speed).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
-    player.mesh.position.add(fwd);
+    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(player.mesh.quaternion).multiplyScalar(player.speed);
+    player.mesh.position.add(forwardDir);
+    player.mesh.position.y = THREE.MathUtils.clamp(player.mesh.position.y, CONFIG.altitudeMin, CONFIG.altitudeMax);
     if(player.flame) {
         player.flame.scale.z = player.speed * 2;
         const flameTargetColor = turboActive ? TURBO_FLAME_COLOR : PLAYER_FLAME_COLOR;
@@ -1098,9 +1108,11 @@ function animate() {
     updateSpeedDisplay();
     updateTurboDisplay();
 
-    const camOff = new THREE.Vector3(0, 5, 15).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
+    const camOff = new THREE.Vector3(0, 5, 15).applyQuaternion(yawQuat);
+    const lookTarget = player.mesh.position.clone().add(new THREE.Vector3(0, 0, -20).applyQuaternion(player.mesh.quaternion));
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
-    camera.lookAt(player.mesh.position.clone().add(fwd.clone().multiplyScalar(20)));
+    camera.lookAt(lookTarget);
 
     // Env
     if(environmentMesh) {
