@@ -42,7 +42,6 @@ const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
 const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
 let keys = { w: false, s: false, a: false, d: false, arrowup: false, arrowdown: false, space: false, turbo: false, brake: false };
 let debugLog = false;
-let nextDebugLog = 0;
 let debugState = { pitchInput: 0, turn: 0 };
 let mouse = { x: 0, y: 0, isDown: false };
 let enemyIdCounter = 0;
@@ -1048,13 +1047,29 @@ function updateHighScoreDisplay() {
         ui.highScoreList.appendChild(li);
     }
 }
+function logDebugState(reason) {
+    if(!debugLog) return;
+    const rotX = player.mesh.rotation.x, rotY = player.mesh.rotation.y, rotZ = player.mesh.rotation.z;
+    const toDeg = (r) => Number((r * 180 / Math.PI).toFixed(1));
+    console.log('[DBG]', reason, {
+        keys: { w: keys.w, s: keys.s, up: keys.arrowup, down: keys.arrowdown, a: keys.a, d: keys.d, brake: keys.brake, turbo: keys.turbo },
+        pitchInput: debugState.pitchInput,
+        turn: debugState.turn,
+        rotRad: { x: Number(rotX.toFixed(3)), y: Number(rotY.toFixed(3)), z: Number(rotZ.toFixed(3)) },
+        rotDeg: { x: toDeg(rotX), y: toDeg(rotY), z: toDeg(rotZ) },
+        speed: Number(player.speed.toFixed(3)),
+        altitude: Number(player.mesh.position.y.toFixed(2))
+    });
+}
+
 function onKey(e, down) {
     const k = e.key.toLowerCase();
     if(k === 'shift') { keys.turbo = down; return; }
     if(k === 'c') { keys.brake = down; return; }
-    if(k === 'l') { if(down) { debugLog = !debugLog; nextDebugLog = 0; console.log(`DEBUG LOG ${debugLog ? 'ON' : 'OFF'}`); } return; }
+    if(k === 'l') { if(down) { debugLog = !debugLog; console.log(`DEBUG LOG ${debugLog ? 'ON' : 'OFF'}`); if(debugLog) logDebugState('TOGGLE_ON'); } return; }
     if(keys[k] !== undefined) keys[k] = down;
     if(k === ' ' && down) fireMissile(player, false);
+    logDebugState(`KEY ${k} ${down ? 'down' : 'up'}`);
 }
 function onMouseMove(e) {
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
@@ -1439,29 +1454,6 @@ function animate() {
     updateUI();
     renderer.render(scene, camera);
 
-    if(debugLog && nowFrame >= nextDebugLog) {
-        const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-        const planeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.mesh.quaternion);
-        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-        console.log('[DBG]', {
-            t: nowFrame,
-            keys: { w: keys.w, s: keys.s, up: keys.arrowup, down: keys.arrowdown, a: keys.a, d: keys.d, brake: keys.brake, turbo: keys.turbo },
-            pitchInput: debugState.pitchInput,
-            turn: debugState.turn,
-            rot: {
-                x: Number(player.mesh.rotation.x.toFixed(3)),
-                y: Number(player.mesh.rotation.y.toFixed(3)),
-                z: Number(player.mesh.rotation.z.toFixed(3))
-            },
-            speed: Number(player.speed.toFixed(3)),
-            altitude: Number(player.mesh.position.y.toFixed(2)),
-            turbo: Number(turboCharge.toFixed(2)),
-            camForward: { x: Number(camForward.x.toFixed(3)), y: Number(camForward.y.toFixed(3)), z: Number(camForward.z.toFixed(3)) },
-            planeForward: { x: Number(planeForward.x.toFixed(3)), y: Number(planeForward.y.toFixed(3)), z: Number(planeForward.z.toFixed(3)) },
-            camUp: { x: Number(camUp.x.toFixed(3)), y: Number(camUp.y.toFixed(3)), z: Number(camUp.z.toFixed(3)) }
-        });
-        nextDebugLog = nowFrame + 500;
-    }
 }
 
 init();
