@@ -58,6 +58,7 @@ let score = 0, armor = 100, missileCount = CONFIG.missileCapacity;
 let lastShotTime = 0, lastMissileTime = 0, missileReloadEndTime = null;
 let muzzleFlashLight;
 let turboCharge = 1;
+let turboLocked = false;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
 
@@ -194,6 +195,7 @@ function startGame(stage, opts = {}) {
     lives = (gameMode === GAME_MODES.ONLINE_VS) ? 3 : 1;
     stats = { damageDealt: 0, damageTaken: 0, kills: 0, deaths: 0 };
     turboCharge = 1;
+    turboLocked = false;
     lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
@@ -1056,12 +1058,21 @@ function animate() {
         }
     }
 
-    const turboActive = keys.turbo && turboCharge > 0.02;
+    // Turbo charge management
+    if(turboCharge <= 0.02 && !turboLocked) {
+        turboLocked = true;
+    }
+    
+    const turboActive = keys.turbo && turboCharge > 0.02 && !turboLocked;
+    
     if(turboActive) {
         turboCharge = Math.max(0, turboCharge - CONFIG.turboDrainRate * dt);
     } else {
         const regenFactor = Math.max(0.5, player.speed / CONFIG.playerSpeedMax);
         turboCharge = Math.min(1, turboCharge + CONFIG.turboChargeRate * regenFactor * dt);
+        if(turboLocked && turboCharge >= 1) {
+            turboLocked = false;
+        }
     }
 
     // Player Move
@@ -1084,6 +1095,8 @@ function animate() {
         const flameTargetColor = turboActive ? TURBO_FLAME_COLOR : PLAYER_FLAME_COLOR;
         player.flame.material.color.lerp(flameTargetColor, 0.2);
     }
+    updateSpeedDisplay();
+    updateTurboDisplay();
 
     const camOff = new THREE.Vector3(0, 5, 15).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
     camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
