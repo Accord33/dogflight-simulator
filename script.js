@@ -20,6 +20,24 @@ const CONFIG = {
     enemyApproachDistance: 1300,
     enemyHoldDistance: 650,
     enemyEvadeDistance: 450,
+    enemyWaveMaxSizeIncrease: 3,
+    enemyWaveMinDistance: 500,
+    enemyWaveDistanceRange: 400,
+    enemyGunRange: 800,
+    enemyGunHitRadius: 2.6,
+    playerGunHitRadius: 3.2,
+    enemyFireProfiles: {
+        approach: { fireIntervalMs: 320, burst: 3, burstCooldownMs: 1400, maxAngle: 0.8 },
+        strafe:   { fireIntervalMs: 260, burst: 4, burstCooldownMs: 1100, maxAngle: 1.0 },
+        evade:    { fireIntervalMs: 420, burst: 2, burstCooldownMs: 1700, maxAngle: 0.9 }
+    },
+    enemyMissileScheduler: {
+        minRange: 140,
+        maxRange: 1050,
+        maxAngle: 0.55,
+        staggerMs: 750,
+        requeueDelayMs: 5200
+    },
     seaSize: 2000,
     fireRate: 80 // ms between shots
 };
@@ -35,11 +53,24 @@ const TARGET_ENEMY_COUNT = 8;
 
 const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLINE_COOP' };
 const NET_DEFAULT_URL = 'ws://localhost:3001';
+const FORMATION_TYPES = {
+    DELTA: 'DELTA',
+    LINE_ABREAST: 'LINE_ABREAST',
+    ECHELON_RIGHT: 'ECHELON_RIGHT',
+    STACK: 'STACK'
+};
+const ENEMY_FORMATIONS = [
+    { type: FORMATION_TYPES.DELTA, size: 5, spacing: 30 },
+    { type: FORMATION_TYPES.LINE_ABREAST, size: 6, spacing: 28 },
+    { type: FORMATION_TYPES.ECHELON_RIGHT, size: 4, spacing: 32 },
+    { type: FORMATION_TYPES.STACK, size: 5, spacing: 26 }
+];
 
 // Globals
 let scene, camera, renderer;
 let player, environmentMesh, obstacles = [];
 let bullets = [], missiles = [], enemies = [], particles = [];
+let missileQueue = [];
 const PLAYER_FLAME_COLOR = new THREE.Color(CONFIG.playerFlameColor);
 const TURBO_FLAME_COLOR = new THREE.Color(CONFIG.turboFlameColor);
 let keys = { w: false, s: false, a: false, d: false, space: false, turbo: false };
@@ -71,6 +102,7 @@ let turboCharge = 1;
 let turboLocked = false;
 const scoreListKey = 'aceWingHighScores';
 let lastFrameTime = Date.now();
+let waveIndex = 0;
 
 // UI Refs
 const ui = {
@@ -209,7 +241,7 @@ function startGame(stage, opts = {}) {
     lastNetStateSent = 0; pendingEnemySnapshot = null; lastEnemySnapshotTime = 0;
     
     while(scene.children.length > 0) scene.remove(scene.children[0]);
-    bullets = []; missiles = []; enemies = []; particles = []; obstacles = [];
+    bullets = []; missiles = []; enemies = []; particles = []; obstacles = []; missileQueue = [];
     ui.markersLayer.innerHTML = ''; 
 
     setupEnvironment(stage);
@@ -227,8 +259,9 @@ function startGame(stage, opts = {}) {
     setScreen('playing');
     ui.gameOverMsg.style.display = 'none';
 
+    waveIndex = 0;
     if(gameMode !== GAME_MODES.ONLINE_VS && (gameMode !== GAME_MODES.ONLINE_COOP || isNetHost)) {
-        replenishEnemies(TARGET_ENEMY_COUNT);
+        spawnFormationWave(waveIndex);
     }
     
     animate();
@@ -406,7 +439,7 @@ class NetClient {
             case 'host-grant':
                 isNetHost = true;
                 if(gameMode === GAME_MODES.ONLINE_COOP && enemies.length === 0) {
-                    replenishEnemies(TARGET_ENEMY_COUNT);
+                    spawnFormationWave(waveIndex);
                 }
                 break;
             case 'matching':
@@ -426,8 +459,11 @@ class NetClient {
 function fireBullet(source, isEnemy, opts = {}) {
     const now = Date.now();
     if(isEnemy && !opts.fromRemote) {
-        if (now - (source.lastShot||0) < 1000) return; // Enemy rate limit
-        source.lastShot = now;
+        const minInterval = opts.minIntervalMs || 1000;
+        if(!opts.bypassRateLimiter) {
+            if (now - (source.lastShot||0) < minInterval) return; // Enemy rate limit
+            source.lastShot = now;
+        }
     }
 
     const geo = new THREE.CylinderGeometry(0.12, 0.18, 3.4, 10); // Brighter, thicker round
@@ -467,7 +503,7 @@ function fireBullet(source, isEnemy, opts = {}) {
     b.quaternion.copy(spawnQuat);
     b.translateZ(-2);
     scene.add(b);
-    bullets.push({ mesh: b, life: 80, isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
+    bullets.push({ mesh: b, life: Math.ceil(CONFIG.enemyGunRange / CONFIG.bulletSpeed), isEnemy: isEnemy, ownerId: opts.ownerId || (netPlayerId || 'local'), fromRemote: opts.fromRemote });
 
     // Visuals
     if(!isEnemy && source === player) {
@@ -484,6 +520,24 @@ function fireBullet(source, isEnemy, opts = {}) {
             quaternion: { x: spawnQuat.x, y: spawnQuat.y, z: spawnQuat.z, w: spawnQuat.w }
         });
     }
+}
+
+function getPlayerVelocity() {
+    const dir = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0,1,0), player.mesh.rotation.y);
+    return dir.multiplyScalar(player.speed || CONFIG.cruiseSpeed);
+}
+
+function computeLeadQuaternion(shooter, toTargetVec) {
+    const shooterVel = shooter.velocity ? shooter.velocity.clone() : new THREE.Vector3();
+    const targetVel = getPlayerVelocity();
+    const relativeVel = targetVel.sub(shooterVel);
+    const distance = toTargetVec.length();
+    const timeToImpact = Math.min(2.5, distance / CONFIG.bulletSpeed);
+    const predictedPos = player.mesh.position.clone().add(relativeVel.multiplyScalar(timeToImpact));
+    const aimDir = predictedPos.sub(shooter.mesh.position);
+    if(aimDir.lengthSq() < 0.0001) aimDir.copy(toTargetVec);
+    aimDir.normalize();
+    return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), aimDir);
 }
 
 // ... (Environment, Entities, Missile functions similar to before) ...
@@ -631,8 +685,66 @@ function createEnemy() {
         velocity: new THREE.Vector3(),
         state: 'approach',
         stateTimer: 0,
-        strafeDir: Math.random() < 0.5 ? -1 : 1
+        strafeDir: Math.random() < 0.5 ? -1 : 1,
+        burstRemaining: 0,
+        nextShotAt: 0,
+        nextBurstAt: 0,
+        missileQueued: false,
+        nextMissileWindow: 0
     };
+}
+
+function getEnemyFireProfile(state) {
+    return CONFIG.enemyFireProfiles[state] || CONFIG.enemyFireProfiles.approach;
+}
+
+function handleEnemyGunAttack(enemy, toPlayer, dist, now) {
+    if(dist > CONFIG.enemyGunRange) { enemy.burstRemaining = 0; return; }
+    const profile = getEnemyFireProfile(enemy.state);
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(enemy.mesh.quaternion);
+    const angle = forward.angleTo(toPlayer.clone().normalize());
+    if(angle > profile.maxAngle) { enemy.burstRemaining = 0; return; }
+    if(now < enemy.nextBurstAt) return;
+
+    if(enemy.burstRemaining <= 0) {
+        enemy.burstRemaining = profile.burst;
+        enemy.nextShotAt = now;
+    }
+
+    if(now >= enemy.nextShotAt && enemy.burstRemaining > 0) {
+        const aimQuat = computeLeadQuaternion(enemy, toPlayer.clone());
+        fireBullet(enemy, true, { bypassRateLimiter: true, quaternion: aimQuat });
+        enemy.burstRemaining -= 1;
+        enemy.nextShotAt = now + profile.fireIntervalMs;
+        if(enemy.burstRemaining <= 0) {
+            enemy.nextBurstAt = now + profile.burstCooldownMs;
+        }
+    }
+}
+
+function queueEnemyMissile(enemy, toPlayer, dist, now) {
+    const cfg = CONFIG.enemyMissileScheduler;
+    if(dist < cfg.minRange || dist > cfg.maxRange) return;
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(enemy.mesh.quaternion);
+    const angle = forward.angleTo(toPlayer.clone().normalize());
+    if(angle > cfg.maxAngle) return;
+    if(enemy.missileQueued || now < enemy.nextMissileWindow) return;
+    missileQueue.push({ enemyId: enemy.id, time: now + cfg.staggerMs * missileQueue.length });
+    enemy.missileQueued = true;
+    enemy.nextMissileWindow = now + cfg.requeueDelayMs;
+}
+
+function processMissileQueue(now) {
+    missileQueue = missileQueue.filter(entry => enemies.some(e => e.id === entry.enemyId));
+    missileQueue.sort((a,b) => a.time - b.time);
+    while(missileQueue.length && missileQueue[0].time <= now) {
+        const entry = missileQueue.shift();
+        const enemy = enemies.find(e => e.id === entry.enemyId);
+        if(enemy) {
+            fireMissile(enemy, true);
+            enemy.missileQueued = false;
+        }
+    }
 }
 
 function ensureRemotePlayer(id) {
@@ -827,52 +939,90 @@ function syncEnemiesFromSnapshot(snapshot) {
     pendingEnemySnapshot = null;
 }
 
-function replenishEnemies(target = TARGET_ENEMY_COUNT) {
-    const missing = Math.max(0, target - enemies.length);
-    if(missing > 0) spawnEnemyWave(missing);
-}
-
-function spawnEnemyWave(count = 3) {
-    if(!player || !player.mesh) return;
-    const waveId = ++enemyWaveId;
+function spawnEnemy(opts = {}) {
+    const e = createEnemy();
+    e.id = ++enemyIdCounter;
+    e.hp = 1;
     const angle = Math.random() * Math.PI * 2;
     const dist = 400 + Math.random() * 300;
-    const center = new THREE.Vector3(
+    const fallbackPos = new THREE.Vector3(
         player.mesh.position.x + Math.cos(angle) * dist,
         DEFAULT_SPAWN_HEIGHT,
         player.mesh.position.z + Math.sin(angle) * dist
     );
-    const heading = new THREE.Vector3().subVectors(player.mesh.position, center).normalize();
-    const facing = heading.lengthSq() > 0 ? heading : new THREE.Vector3(0, 0, -1);
-    const baseQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), facing);
-    const formationOffsets = [
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(-25, 0, -25),
-        new THREE.Vector3(25, 0, -25),
-        new THREE.Vector3(-45, 0, -45),
-        new THREE.Vector3(45, 0, -45),
-        new THREE.Vector3(-65, 0, -65),
-        new THREE.Vector3(65, 0, -65),
-        new THREE.Vector3(0, 0, -65)
-    ];
+    const pos = opts.position || fallbackPos;
+    e.mesh.position.copy(pos);
 
-    for(let i=0; i<count; i++) {
-        const e = createEnemy();
-        e.id = ++enemyIdCounter;
-        e.hp = 1;
-        e.waveId = waveId;
-        e.isLeader = i === 0;
-        e.formationOffset = formationOffsets[i] || new THREE.Vector3((Math.random() - 0.5) * 60, 0, -40 - (i * 10));
-        e.waveReformPoint = center.clone();
-        e.state = ENEMY_STATES.FORM_UP;
-        e.stateTimer = 0;
-        e.velocity = new THREE.Vector3();
-        const spawnPos = center.clone().add(e.formationOffset.clone().applyQuaternion(baseQuat));
-        e.mesh.position.copy(spawnPos);
-        e.mesh.quaternion.copy(baseQuat);
-        scene.add(e.mesh);
-        enemies.push(e);
-        attachEnemyMarker(e);
+    if(opts.forward) {
+        const forward = opts.forward.clone().normalize();
+        const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), forward);
+        e.mesh.quaternion.copy(targetQuat);
+    }
+
+    scene.add(e.mesh);
+    enemies.push(e);
+    attachEnemyMarker(e);
+}
+
+function spawnFormationWave(index = 0) {
+    const base = ENEMY_FORMATIONS[index % ENEMY_FORMATIONS.length];
+    const size = base.size + Math.min(CONFIG.enemyWaveMaxSizeIncrease, Math.floor(index / ENEMY_FORMATIONS.length));
+    const spacing = base.spacing;
+    const leaderDistance = CONFIG.enemyWaveMinDistance + Math.random() * CONFIG.enemyWaveDistanceRange;
+    const angle = Math.random() * Math.PI * 2;
+    const leaderPos = new THREE.Vector3(
+        player.mesh.position.x + Math.cos(angle) * leaderDistance,
+        DEFAULT_SPAWN_HEIGHT,
+        player.mesh.position.z + Math.sin(angle) * leaderDistance
+    );
+    const forward = new THREE.Vector3().subVectors(player.mesh.position, leaderPos).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
+
+    const offsets = buildFormationOffsets(base.type, size, spacing);
+    offsets.forEach(off => {
+        const worldPos = leaderPos.clone()
+            .add(right.clone().multiplyScalar(off.x))
+            .add(new THREE.Vector3(0, off.y, 0))
+            .add(forward.clone().multiplyScalar(off.z));
+        spawnEnemy({ position: worldPos, forward });
+    });
+}
+
+function buildFormationOffsets(type, size, spacing) {
+    const offsets = [new THREE.Vector3(0, 0, 0)];
+    for(let i=1; i<size; i++) {
+        switch(type) {
+            case FORMATION_TYPES.LINE_ABREAST: {
+                const side = (i % 2 === 0) ? 1 : -1;
+                const column = Math.floor((i+1)/2);
+                offsets.push(new THREE.Vector3(side * spacing * column, 0, 0));
+                break;
+            }
+            case FORMATION_TYPES.ECHELON_RIGHT: {
+                offsets.push(new THREE.Vector3(spacing * i, 0, spacing * i * 0.4));
+                break;
+            }
+            case FORMATION_TYPES.STACK: {
+                offsets.push(new THREE.Vector3( (i % 2 === 0 ? 1 : -1) * spacing * 0.6, 0, spacing * Math.floor(i/2) * 0.7));
+                break;
+            }
+            case FORMATION_TYPES.DELTA:
+            default: {
+                const rank = Math.floor((i+1)/2);
+                const side = (i % 2 === 0) ? 1 : -1;
+                offsets.push(new THREE.Vector3(side * spacing * rank, 0, spacing * rank));
+                break;
+            }
+        }
+    }
+    return offsets;
+}
+
+function ensureWaveContinuity(runEnemies) {
+    if(!isPlaying || !runEnemies) return;
+    if(enemies.length === 0) {
+        waveIndex++;
+        spawnFormationWave(waveIndex);
     }
 }
 
@@ -1212,13 +1362,14 @@ function animate() {
             }
             
             let hit = false;
+            const hitRadius = p.isEnemy ? CONFIG.enemyGunHitRadius : CONFIG.playerGunHitRadius;
             if(p.isEnemy) {
-                if(p.mesh.position.distanceTo(player.mesh.position) < 2) { hit = true; armor -= 10; stats.damageTaken += 10; createExplosion(p.mesh.position, 1); }
+                if(p.mesh.position.distanceTo(player.mesh.position) < hitRadius) { hit = true; armor -= 10; stats.damageTaken += 10; createExplosion(p.mesh.position, 1); }
             } else {
                 if(isVs) {
                     for(const id in remotePlayers) {
                         const rp = remotePlayers[id];
-                        if(rp && rp.mesh.position.distanceTo(p.mesh.position) < 3) {
+                        if(rp && rp.mesh.position.distanceTo(p.mesh.position) < hitRadius) {
                             hit = true; createExplosion(rp.mesh.position, 3);
                             sendNet('hit', { targetId: id, amount: 10 });
                             stats.damageDealt += 10;
@@ -1227,11 +1378,11 @@ function animate() {
                 }
                 if(allowEnemyDamage) {
                     for(let j=enemies.length-1; j>=0; j--) {
-                        if(p.mesh.position.distanceTo(enemies[j].mesh.position) < 3) {
+                        if(p.mesh.position.distanceTo(enemies[j].mesh.position) < hitRadius) {
                             hit = true; createExplosion(enemies[j].mesh.position, 3);
                             if(enemies[j].marker) enemies[j].marker.remove();
                             scene.remove(enemies[j].mesh); enemies.splice(j, 1);
-                            score += 100; setTimeout(() => replenishEnemies(TARGET_ENEMY_COUNT), 2000);
+                            score += 100;
                         }
                     }
                 }
@@ -1251,7 +1402,7 @@ function animate() {
 
         if(runEnemies) {
             if(dist > 2500) {
-                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); replenishEnemies(TARGET_ENEMY_COUNT); continue;
+                if(e.marker) e.marker.remove(); scene.remove(e.mesh); enemies.splice(i, 1); continue;
             }
 
             e.stateTimer = (e.stateTimer || 0) + dt;
@@ -1354,9 +1505,11 @@ function animate() {
             const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,-1), moveDir);
             e.mesh.quaternion.slerp(targetQuat, CONFIG.enemyTurnLerp);
 
-            if(e.state === ENEMY_STATES.ATTACK_RUN && dist < 800) {
-                 if(nowFrame - (e.lastShot||0) > 1000) { fireBullet(e, true); e.lastShot = nowFrame; }
-                 if(Math.random() < 0.005 && dist > 100) fireMissile(e, true);
+            if(dist < CONFIG.enemyGunRange) {
+                handleEnemyGunAttack(e, toP, dist, nowFrame);
+                queueEnemyMissile(e, toP, dist, nowFrame);
+            } else {
+                e.burstRemaining = 0;
             }
         }
 
@@ -1370,6 +1523,8 @@ function animate() {
             } else e.marker.style.display='none';
         }
     }
+
+    processMissileQueue(nowFrame);
 
     if(gameMode === GAME_MODES.ONLINE_VS) {
         for(const id in remotePlayers) {
@@ -1385,6 +1540,8 @@ function animate() {
             } else rp.marker.style.display='none';
         }
     }
+
+    ensureWaveContinuity(runEnemies);
 
     if(runEnemies && gameMode === GAME_MODES.ONLINE_COOP && netClient && netClient.isOpen()) {
         const now = Date.now();
