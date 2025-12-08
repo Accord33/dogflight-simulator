@@ -1,0 +1,5 @@
+name = "ace-wing-online-frontend"
+compatibility_date = "2025-12-08"
+
+[assets]
+directory = "./frontend"
