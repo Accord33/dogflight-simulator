@@ -10,8 +10,17 @@ const app = new Hono<{ Bindings: Bindings }>()
 // CORS設定
 app.use('/*', cors())
 
-// 静的ファイル配信（Pagesで不要だが、開発時用）
-app.get('/', (c) => c.text('Ace Wing Online Server'))
+// ルートアクセス時の説明
+app.get('/', (c) => {
+  return c.json({
+    service: 'Ace Wing Online WebSocket Server',
+    status: 'running',
+    endpoints: {
+      websocket: '/ws',
+      documentation: 'Connect via WebSocket to /ws endpoint'
+    }
+  })
+})
 
 // WebSocket接続エンドポイント
 app.get('/ws', async (c) => {
