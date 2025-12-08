@@ -55,7 +55,7 @@ const GAME_MODES = { LOCAL: 'LOCAL', ONLINE_VS: 'ONLINE_VS', ONLINE_COOP: 'ONLIN
 // Cloudflare Workers用のURL（本番環境ではあなたのWorkerのURLに変更してください）
 const NET_DEFAULT_URL = window.location.hostname === 'localhost' 
     ? 'ws://localhost:8787/ws' 
-    : 'wss://your-worker-name.your-subdomain.workers.dev/ws';
+    : 'wss://ace-wing-online.skb-ceg-biblia.workers.dev/ws';
 const FORMATION_TYPES = {
     DELTA: 'DELTA',
     LINE_ABREAST: 'LINE_ABREAST',
